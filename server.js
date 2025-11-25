@@ -822,8 +822,5 @@ const HOST = process.env.HOST || '0.0.0.0';
 
 server.listen(PORT, HOST, () => {
   console.log(`Servidor corriendo en http://${HOST}:${PORT}`);
-  if (process.env.RAILWAY_ENVIRONMENT) {
-    console.log('🚂 Desplegado en Railway');
-  }
 });
 

@@ -73,42 +73,23 @@ npm run dev
 4. Acceder a la aplicación:
 - Abrir navegador en: `http://localhost:3000`
 
-## 🚂 Despliegue en Railway
+## 🚀 Despliegue en Render
 
-### Opción 1: Desde GitHub
+### Opción 1: Desde GitHub (Recomendado)
 
 1. Sube el proyecto a GitHub
-2. Conecta tu repositorio en Railway
-3. Railway detectará automáticamente el proyecto Node.js
-4. El despliegue se realizará automáticamente
+2. Ve a [Render Dashboard](https://dashboard.render.com)
+3. Click en "New +" → "Web Service"
+4. Conecta tu repositorio de GitHub
+5. Render detectará automáticamente el archivo `render.yaml`
+6. El despliegue se realizará automáticamente
 
-### Opción 2: Desde CLI
+### Configuración en Render
 
-1. Instala Railway CLI:
-```bash
-npm i -g @railway/cli
-```
-
-2. Inicia sesión:
-```bash
-railway login
-```
-
-3. Inicializa el proyecto:
-```bash
-railway init
-```
-
-4. Despliega:
-```bash
-railway up
-```
-
-### Configuración en Railway
-
-- **Build Command**: `npm install`
-- **Start Command**: `npm start`
-- **Port**: Railway asigna automáticamente el puerto (el código usa `process.env.PORT`)
+- **Build Command**: `npm install` (automático desde render.yaml)
+- **Start Command**: `npm start` (automático desde render.yaml)
+- **Port**: Render asigna automáticamente el puerto (el código usa `process.env.PORT`)
+- **Node Version**: Se detecta automáticamente desde `package.json`
 
 ## 🗄️ Base de Datos
 
@@ -120,7 +101,7 @@ La aplicación utiliza SQLite para almacenar:
 - Promociones
 - Notificaciones
 
-**Nota**: En Railway, la base de datos se crea automáticamente al iniciar la aplicación.
+**Nota**: En Render, la base de datos se crea automáticamente al iniciar la aplicación.
 
 ## 📱 Uso
 
