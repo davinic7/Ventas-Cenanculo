@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Ventas Cenáculo</title>
+    <link rel="icon" type="image/png" href="images/logo-cenaculo.png">
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+</head>
+<body>
+    <div id="app">
+        <!-- Pantalla de selección de perfil -->
+        <div id="perfil-selector" class="screen active">
+            <div class="container">
+                <div class="logo-container">
+                    <img src="images/logo-cenaculo.png" alt="Comunidad Cenáculo Argentina" class="logo" id="logo-img" onerror="this.style.display='none'; document.getElementById('logo-fallback').style.display='block';">
+                    <h1 id="logo-fallback" style="display: none;">🍽️ Ventas Cenáculo</h1>
+                </div>
+                <p class="subtitle">Selecciona tu perfil</p>
+                <div class="perfil-buttons">
+                    <button class="perfil-btn" onclick="seleccionarPerfil('vendedor')">
+                        <span class="icon">🛒</span>
+                        <span class="label">Vendedor</span>
+                    </button>
+                    <button class="perfil-btn" onclick="seleccionarPerfil('cocina')">
+                        <span class="icon">🍴</span>
+                        <span class="label">Cocina</span>
+                    </button>
+                    <button class="perfil-btn" onclick="seleccionarPerfil('despacho')">
+                        <span class="icon">📦</span>
+                        <span class="label">Despacho</span>
+                    </button>
+                    <button class="perfil-btn" onclick="seleccionarPerfil('ventas')">
+                        <span class="icon">📊</span>
+                        <span class="label">Historial Ventas</span>
+                    </button>
+                </div>
+                <div style="margin-top: 20px; text-align: center;">
+                    <button class="btn-cierre-actividad" onclick="abrirModalCierreActividad()" style="padding: 12px 24px; font-size: 0.9rem; background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); color: white; border: none; border-radius: 12px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); transition: all 0.3s;">
+                        🔒 Cierre de Actividad
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal de Cierre de Actividad -->
+        <div id="modal-cierre-actividad" class="modal" onclick="if(event.target === this) cerrarModalCierreActividad()">
+            <div class="modal-content" onclick="event.stopPropagation()">
+                <h3 style="color: var(--danger); margin-bottom: 20px; text-align: center;">
+                    ⚠️ Cierre de Actividad
+                </h3>
+                <div style="margin-bottom: 24px;">
+                    <p style="color: var(--text-secondary); margin-bottom: 16px; line-height: 1.6; text-align: center; font-weight: 500;">
+                        Esta acción eliminará todos los datos realizados en el día y reseteará los stocks de los productos a cero.
+                    </p>
+                    <div style="background: var(--bg-secondary); padding: 16px; border-radius: 12px; margin-bottom: 20px;">
+                        <p style="font-weight: 600; margin-bottom: 12px; color: var(--text);">Se eliminará:</p>
+                        <ul style="margin-left: 20px; line-height: 2; color: var(--text-secondary);">
+                            <li>Todos los historiales de ventas</li>
+                            <li>Todos los movimientos y registros</li>
+                            <li>Todas las notificaciones</li>
+                            <li>Todos los pedidos</li>
+                        </ul>
+                        <p style="font-weight: 600; margin-top: 12px; color: var(--text);">Se reseteará:</p>
+                        <ul style="margin-left: 20px; line-height: 2; color: var(--text-secondary);">
+                            <li>Stocks de todos los productos a cero (sin borrar los productos)</li>
+                        </ul>
+                    </div>
+                    <p style="color: var(--danger); font-weight: 600; text-align: center; font-size: 0.95rem;">
+                        ⚠️ Esta acción NO se puede deshacer
+                    </p>
+                </div>
+                <div style="margin-bottom: 24px;">
+                    <label for="palabra-clave-cierre" style="display: block; margin-bottom: 10px; font-weight: 600; color: var(--text);">
+                        Ingresa la palabra clave para confirmar:
+                    </label>
+                    <input type="text" id="palabra-clave-cierre" class="input" placeholder="Palabra clave" style="font-size: 1rem; padding: 12px; text-align: center; letter-spacing: 2px; width: 100%;" autocomplete="off">
+                </div>
+                <div class="modal-buttons">
+                    <button class="btn-secondary" onclick="cerrarModalCierreActividad()" style="flex: 1; padding: 12px;">
+                        Cancelar
+                    </button>
+                    <button class="btn-danger" onclick="validarPalabraClave()" style="flex: 1; padding: 12px; background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);">
+                        Continuar
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal de Confirmación Final -->
+        <div id="modal-confirmacion-final" class="modal" onclick="if(event.target === this) cerrarModalConfirmacionFinal()">
+            <div class="modal-content" onclick="event.stopPropagation()" style="max-width: 450px;">
+                <div style="text-align: center; margin-bottom: 24px;">
+                    <div style="font-size: 4rem; margin-bottom: 16px;">⚠️</div>
+                    <h3 style="color: var(--danger); margin-bottom: 12px; font-size: 1.5rem;">
+                        Confirmación Final
+                    </h3>
+                    <p style="color: var(--text-secondary); line-height: 1.6; font-size: 1rem;">
+                        ¿Estás seguro de que deseas cerrar la actividad?
+                    </p>
+                </div>
+                <div style="background: var(--bg-secondary); padding: 16px; border-radius: 12px; margin-bottom: 24px;">
+                    <p style="color: var(--text); font-weight: 600; margin-bottom: 8px;">Esta acción:</p>
+                    <ul style="margin-left: 20px; line-height: 1.8; color: var(--text-secondary); font-size: 0.95rem;">
+                        <li>Eliminará TODAS las ventas</li>
+                        <li>Eliminará TODOS los pedidos</li>
+                        <li>Eliminará TODAS las notificaciones</li>
+                        <li>Reseteará TODOS los stocks a cero</li>
+                    </ul>
+                    <p style="color: var(--danger); font-weight: 600; margin-top: 12px; text-align: center;">
+                        ⚠️ Esta acción NO se puede deshacer
+                    </p>
+                </div>
+                <div class="modal-buttons">
+                    <button class="btn-secondary" onclick="cerrarModalConfirmacionFinal()" style="flex: 1; padding: 12px;">
+                        Cancelar
+                    </button>
+                    <button class="btn-danger" onclick="procesarCierreActividad()" style="flex: 1; padding: 12px; background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);">
+                        Sí, Confirmar Cierre
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pantalla Vendedor -->
+        <div id="vendedor-screen" class="screen">
+            <div class="header">
+                <button class="back-btn" onclick="volverAtras()">←</button>
+                <div style="display: flex; align-items: center; gap: 8px; flex: 1; justify-content: center;">
+                    <img src="images/logo-cenaculo.png" alt="Cenáculo" class="logo-header" onerror="this.style.display='none';">
+                    <h2>🛒 Vendedor</h2>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <button id="btn-carrito-header" class="btn-carrito-header" onclick="mostrarCarrito()" style="display: none;">
+                        <span>🛒</span>
+                        <span id="carrito-count">0</span>
+                    </button>
+                    <div class="notificaciones-badge" id="vendedor-notif-badge" style="display: none;">0</div>
+                    <button class="btn-secondary" onclick="cerrarSesion()" style="padding: 8px 12px; font-size: 0.85rem;">
+                        Cerrar Sesión
+                    </button>
+                </div>
+            </div>
+            <div class="content">
+                <!-- Vista de Selección de Rubro -->
+                <div id="vendedor-rubros-view" class="section">
+                    <h3>Nuevo Pedido</h3>
+                    <h4 style="margin: 20px 0 15px 0;">Selecciona un rubro:</h4>
+                    <div class="rubros-grid">
+                        <button class="rubro-btn" onclick="seleccionarRubro('comida')">
+                            <span class="rubro-icon">🍽️</span>
+                            <span class="rubro-label">Comida</span>
+                        </button>
+                        <button class="rubro-btn" onclick="seleccionarRubro('bebidas')">
+                            <span class="rubro-icon">🥤</span>
+                            <span class="rubro-label">Bebidas</span>
+                        </button>
+                        <button class="rubro-btn" onclick="seleccionarRubro('postres')">
+                            <span class="rubro-icon">🍰</span>
+                            <span class="rubro-label">Postres</span>
+                        </button>
+                    </div>
+                    <button class="btn-primary" onclick="mostrarModalPromoEspecial()" style="width: 100%; margin-top: 15px;">
+                        🎁 Crear Promo Especial
+                    </button>
+                </div>
+        <!-- Modal Promo Especial -->
+        <div id="modal-promo-especial" class="modal">
+            <div class="modal-content" style="max-width: 700px;">
+                <div class="modal-header">
+                    <h3>Crear Promo</h3>
+                    <button class="close-btn" onclick="ocultarModalPromoEspecial()">✕</button>
+                </div>
+                <div class="modal-body">
+                    <div style="margin-bottom: 20px;">
+                        <label for="promo-especial-precio" class="label">Precio Total de la Promo</label>
+                        <input type="number" id="promo-especial-precio" class="input" placeholder="0.00" min="0" step="0.01" style="font-size: 1.1rem; padding: 12px;">
+                        <p style="font-size: 0.85rem; color: var(--text-light); margin-top: 5px;">Precio especial total para todos los productos seleccionados</p>
+                    </div>
+                    <div style="margin-top: 20px;">
+                        <h4 style="margin-bottom: 10px;">Selecciona los productos que incluye la Promo</h4>
+                        <div id="promo-especial-lista" style="max-height: 400px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; padding: 15px;">
+                            <p style="text-align: center; color: var(--text-light);">Cargando productos...</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn-secondary" onclick="ocultarModalPromoEspecial()">Cancelar</button>
+                    <button class="btn-primary" onclick="guardarPromoEspecial()">Agregar Promo al Carrito</button>
+                </div>
+            </div>
+        </div>
+
+                <!-- Vista de Productos por Rubro -->
+                <div id="vendedor-productos-view" style="display: none;">
+                    <div class="section">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                            <h3 id="rubro-titulo">Productos</h3>
+                            <button class="btn-secondary" onclick="volverRubros()">← Volver a Rubros</button>
+                        </div>
+                        <!-- Breadcrumb de selección de bebidas -->
+                        <div id="bebidas-breadcrumb" style="display: none; margin-bottom: 20px; padding: 15px; background: var(--bg-secondary); border-radius: 12px; border: 2px solid var(--border);">
+                            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                                <span style="font-weight: 600; color: var(--text);">🥤 Bebidas:</span>
+                                <span id="breadcrumb-text" style="color: var(--primary); font-weight: 600;"></span>
+                            </div>
+                        </div>
+                        <!-- Filtros de Bebidas -->
+                        <div id="filtros-bebidas-container" style="display: none;">
+                            <div id="filtro-presentacion" style="margin-bottom: 20px;">
+                                <h4 style="margin-bottom: 15px;">Selecciona la presentación:</h4>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                    <button class="btn-primary" onclick="seleccionarPresentacionBebida('vaso')" style="padding: 20px;">
+                                        <span style="font-size: 2rem;">🥤</span>
+                                        <span>Vaso</span>
+                                    </button>
+                                    <button class="btn-primary" onclick="seleccionarPresentacionBebida('botella')" style="padding: 20px;">
+                                        <span style="font-size: 2rem;">🍾</span>
+                                        <span>Botella</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="filtro-tipo" style="display: none; margin-bottom: 20px;">
+                                <h4 style="margin-bottom: 15px;">Selecciona el tipo de bebida:</h4>
+                                <div style="display: grid; grid-template-columns: 1fr; gap: 15px;">
+                                    <button class="btn-primary" onclick="seleccionarTipoBebida('gaseosa')" style="padding: 20px;">
+                                        <span style="font-size: 2rem;">🥤</span>
+                                        <span>Gaseosa</span>
+                                    </button>
+                                    <button class="btn-primary" onclick="seleccionarTipoBebida('agua_saborizada')" style="padding: 20px;">
+                                        <span style="font-size: 2rem;">🧃</span>
+                                        <span>Agua Saborizada</span>
+                                    </button>
+                                    <button class="btn-primary" onclick="seleccionarTipoBebida('agua')" style="padding: 20px;">
+                                        <span style="font-size: 2rem;">💧</span>
+                                        <span>Agua</span>
+                                    </button>
+                                </div>
+                                <button class="btn-secondary" onclick="volverFiltroPresentacion()" style="margin-top: 15px;">← Volver</button>
+                            </div>
+                            <div id="filtro-sabor" style="display: none; margin-bottom: 20px;">
+                                <h4 style="margin-bottom: 15px;">Selecciona el sabor:</h4>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                    <button class="btn-primary" onclick="seleccionarSaborBebida('con_gas')" style="padding: 20px;">
+                                        <span style="font-size: 2rem;">💨</span>
+                                        <span>Con Gas</span>
+                                    </button>
+                                    <button class="btn-primary" onclick="seleccionarSaborBebida('sin_gas')" style="padding: 20px;">
+                                        <span style="font-size: 2rem;">💧</span>
+                                        <span>Sin Gas</span>
+                                    </button>
+                                </div>
+                                <button class="btn-secondary" onclick="volverFiltroTipo()" style="margin-top: 15px;">← Volver</button>
+                            </div>
+                        </div>
+                        <div id="productos-rubro-lista"></div>
+                    </div>
+                </div>
+
+                <!-- Vista de Carrito/Resumen -->
+                <div id="vendedor-carrito-view" style="display: none;">
+                    <div class="section">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                            <h3>Carrito</h3>
+                            <button class="btn-secondary" onclick="volverRubros()">← Seguir Comprando</button>
+                        </div>
+                        <div id="carrito-items-lista"></div>
+                        <div class="total-section">
+                            <strong>Total: $<span id="total-pedido">0</span></strong>
+                        </div>
+                        <button class="btn-primary" onclick="mostrarPago()" style="margin-top: 15px;">Pagar</button>
+                    </div>
+                </div>
+
+                <!-- Vista de Pago -->
+                <div id="vendedor-pago-view" style="display: none;">
+                    <div class="section">
+                        <h3>Datos del Pedido</h3>
+                        <div style="margin: 20px 0;">
+                            <label for="nombre-cliente-pago" style="display: block; margin-bottom: 8px; font-weight: 600;">Nombre del Cliente:</label>
+                            <input type="text" id="nombre-cliente-pago" placeholder="Ingresa el nombre del cliente" class="input" style="width: 100%;">
+                        </div>
+                        <h4 style="margin: 20px 0 15px 0;">Selecciona Medio de Pago:</h4>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 20px 0;">
+                            <button class="btn-pago" onclick="seleccionarPago('efectivo')">
+                                <span style="font-size: 2rem;">💰</span>
+                                <span>Efectivo</span>
+                            </button>
+                            <button class="btn-pago" onclick="seleccionarPago('transferencia')">
+                                <span style="font-size: 2rem;">💳</span>
+                                <span>Transferencia</span>
+                            </button>
+                        </div>
+                        
+                        <!-- Sección de Foto Comprobante (solo para transferencia) -->
+                        <div id="seccion-foto-transferencia" style="display: none; margin-top: 30px; padding-top: 20px; border-top: 2px solid var(--border);">
+                            <h4 style="margin-bottom: 15px;">Foto del Comprobante</h4>
+                            <div id="camera-container" style="margin: 20px 0;">
+                                <video id="video" autoplay playsinline style="width: 100%; max-width: 400px; border-radius: 8px; display: none;"></video>
+                                <canvas id="canvas" style="display: none;"></canvas>
+                                <div id="foto-preview" style="margin: 20px 0; text-align: center;"></div>
+                            </div>
+                            <div style="display: flex; gap: 10px; justify-content: center; margin: 20px 0; flex-wrap: wrap;">
+                                <button class="btn-secondary" onclick="iniciarCamara()" id="btn-camara">📷 Tomar Foto</button>
+                                <button class="btn-secondary" onclick="capturarFoto()" id="btn-capturar" style="display: none;">📸 Capturar</button>
+                                <button class="btn-secondary" onclick="repetirFoto()" id="btn-repetir" style="display: none;">🔄 Repetir</button>
+                                <button class="btn-secondary" onclick="omitirFoto()" id="btn-omitir" style="display: none;">Omitir Foto</button>
+                            </div>
+                            <button class="btn-primary" onclick="finalizarPedido()" id="btn-finalizar-transferencia" style="display: none; width: 100%; margin-top: 15px;">Finalizar Pedido</button>
+                        </div>
+                        
+                        <button class="btn-secondary" onclick="volverCarrito()" style="margin-top: 20px;">← Volver</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pantalla Cocina -->
+        <div id="cocina-screen" class="screen">
+            <div class="header">
+                <button class="back-btn" onclick="volverAtras()">←</button>
+                <div style="display: flex; align-items: center; gap: 8px; flex: 1; justify-content: center;">
+                    <img src="images/logo-cenaculo.png" alt="Cenáculo" class="logo-header" onerror="this.style.display='none';">
+                    <h2>🍴 Cocina</h2>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div class="notificaciones-badge" id="cocina-notif-badge" style="display: none;">0</div>
+                    <button class="btn-secondary" onclick="cerrarSesion()" style="padding: 8px 12px; font-size: 0.85rem;">
+                        Cerrar Sesión
+                    </button>
+                </div>
+            </div>
+            <div class="content">
+                <!-- Selección de Cocina (siempre visible primero) -->
+                <div id="cocina-seleccion" class="section">
+                    <h3>Selecciona tu Cocina</h3>
+                    <p style="color: var(--text-light); margin-bottom: 20px;">Elige la cocina en la que vas a trabajar</p>
+                    <select id="cocina-selector" class="input" style="font-size: 1.1rem; padding: 15px;">
+                        <option value="">-- Selecciona una cocina --</option>
+                    </select>
+                    <button id="btn-confirmar-cocina" class="btn-primary" onclick="confirmarCocina()" style="margin-top: 15px; display: none;">
+                        Confirmar Cocina
+                    </button>
+                </div>
+
+                <!-- Contenido de Cocina (solo visible después de seleccionar) -->
+                <div id="cocina-content" style="display: none;">
+                    <div class="section" style="background: var(--success); color: white; margin-bottom: 20px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong>Cocina Seleccionada:</strong>
+                                <span id="cocina-nombre-actual" style="font-size: 1.1rem; margin-left: 10px;"></span>
+                            </div>
+                            <div style="display: flex; gap: 10px;">
+                                <button class="btn-secondary" onclick="mostrarGestionProductos()" style="background: rgba(255,255,255,0.2); color: white; border-color: rgba(255,255,255,0.3);">
+                                    📦 Productos
+                                </button>
+                                <button class="btn-secondary" onclick="cambiarCocina()" style="background: rgba(255,255,255,0.2); color: white; border-color: rgba(255,255,255,0.3);">
+                                    Cambiar Cocina
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Vista Principal: Pedidos -->
+                    <div id="cocina-pedidos-view">
+                        <div class="section">
+                            <h3>Pedidos Pendientes</h3>
+                            <div id="pedidos-lista"></div>
+                        </div>
+                    </div>
+
+                    <!-- Vista de Gestión de Productos (oculta por defecto) -->
+                    <div id="cocina-productos-view" style="display: none;">
+                        <div class="section">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                                <h3>Gestión de Productos</h3>
+                                <button class="btn-secondary" onclick="ocultarGestionProductos()">← Volver a Pedidos</button>
+                            </div>
+                            <button class="btn-secondary" onclick="mostrarFormProducto()">+ Nuevo Producto</button>
+                            <div id="productos-lista"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pantalla Despacho -->
+        <div id="despacho-screen" class="screen">
+            <div class="header">
+                <button class="back-btn" onclick="volverAtras()">←</button>
+                <div style="display: flex; align-items: center; gap: 8px; flex: 1; justify-content: center;">
+                    <img src="images/logo-cenaculo.png" alt="Cenáculo" class="logo-header" onerror="this.style.display='none';">
+                    <h2>📦 Despacho</h2>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <button class="btn-secondary" onclick="mostrarHistorialDespacho()" style="font-size: 0.85rem; padding: 8px 12px;">
+                        📋 Historial
+                    </button>
+                    <div class="notificaciones-badge" id="despacho-notif-badge" style="display: none;">0</div>
+                    <button class="btn-secondary" onclick="cerrarSesion()" style="padding: 8px 12px; font-size: 0.85rem;">
+                        Cerrar Sesión
+                    </button>
+                </div>
+            </div>
+            <div class="content">
+                <div id="despacho-pedidos-view">
+                    <div class="section">
+                        <h3>Pedidos Listos para Entregar</h3>
+                        <div id="pedidos-despacho-lista"></div>
+                    </div>
+                </div>
+                
+                <div id="despacho-historial-view" style="display: none;">
+                    <div class="section">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                            <h3>Historial de Pedidos Entregados</h3>
+                            <button class="btn-secondary" onclick="ocultarHistorialDespacho()">← Volver</button>
+                        </div>
+                        <div id="historial-despacho-lista"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pantalla Historial Ventas -->
+        <div id="ventas-screen" class="screen">
+            <div class="header">
+                <button class="back-btn" onclick="volverAtras()">←</button>
+                <div style="display: flex; align-items: center; gap: 8px; flex: 1; justify-content: center;">
+                    <img src="images/logo-cenaculo.png" alt="Cenáculo" class="logo-header" onerror="this.style.display='none';">
+                    <h2>📊 Historial de Ventas</h2>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <button class="btn-carrito-header" onclick="mostrarTabVentas('estadisticas', event)" style="background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);">
+                        <span>📊</span>
+                        <span>Estadísticas</span>
+                    </button>
+                    <button class="btn-carrito-header" onclick="mostrarTabVentas('pdf', event)" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
+                        <span>📄</span>
+                        <span>PDF</span>
+                    </button>
+                    <button class="btn-secondary" onclick="cerrarSesion()" style="padding: 8px 12px; font-size: 0.85rem;">
+                        Cerrar Sesión
+                    </button>
+                </div>
+            </div>
+            <div class="content">
+                <div class="section">
+                    <div class="resumen-ventas" id="resumen-ventas"></div>
+                    <div class="tabs">
+                        <button class="tab-btn active" onclick="mostrarTabVentas('pedidos', event)">Por Pedidos</button>
+                        <button class="tab-btn" onclick="mostrarTabVentas('productos', event)">Por Productos</button>
+                        <button class="tab-btn" onclick="mostrarTabVentas('comprobantes', event)">📷 Comprobantes</button>
+                        <button class="tab-btn" onclick="mostrarTabVentas('estadisticas', event)">📊 Estadísticas</button>
+                    </div>
+                    <div id="tab-ventas-pedidos" class="tab-content active">
+                        <h3>Ventas por Pedido</h3>
+                        <div class="ventas-columnas">
+                            <div>
+                                <h4 style="color: var(--success); margin-bottom: 10px;">💰 Ventas en Efectivo</h4>
+                                <div id="ventas-efectivo-lista"></div>
+                            </div>
+                            <div>
+                                <h4 style="color: var(--primary); margin-bottom: 10px;">💳 Ventas por Transferencia</h4>
+                                <div id="ventas-transferencia-lista"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="tab-ventas-productos" class="tab-content">
+                        <h3>Ventas por Producto</h3>
+                        <div class="ventas-columnas">
+                            <div>
+                                <h4 style="color: var(--success); margin-bottom: 10px;">💰 Efectivo</h4>
+                                <div id="ventas-productos-efectivo-lista"></div>
+                            </div>
+                            <div>
+                                <h4 style="color: var(--primary); margin-bottom: 10px;">💳 Transferencia</h4>
+                                <div id="ventas-productos-transferencia-lista"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="tab-ventas-comprobantes" class="tab-content">
+                        <h3>📷 Comprobantes de Transferencia</h3>
+                        <p style="color: var(--text-light); margin-bottom: 20px;">Todas las fotos de comprobantes de transferencias</p>
+                        <div id="comprobantes-lista" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px;"></div>
+                    </div>
+                    <div id="tab-ventas-pdf" class="tab-content">
+                        <h3>📄 Generar Reporte PDF</h3>
+                        <div id="pdf-preview-container" style="display: none;">
+                            <div style="background: var(--card-bg); border: 2px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px;">
+                                <h4 style="margin-bottom: 15px;">Vista Previa del Reporte</h4>
+                                <div id="pdf-preview" style="background: white; border: 1px solid var(--border); border-radius: 8px; padding: 20px; max-height: 500px; overflow-y: auto;"></div>
+                            </div>
+                            <button class="btn-primary" onclick="descargarPDF()">
+                                💾 Descargar PDF
+                            </button>
+                        </div>
+                    </div>
+                    <div id="tab-ventas-estadisticas" class="tab-content">
+                        <h3>📊 Estadísticas de Ventas</h3>
+                        <div id="estadisticas-preview-container" style="display: none;">
+                            <div style="background: var(--card-bg); border: 2px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px;">
+                                <h4 style="margin-bottom: 15px;">Vista Previa de Estadísticas</h4>
+                                <div id="estadisticas-preview" style="background: white; border: 1px solid var(--border); border-radius: 8px; padding: 20px; max-height: 500px; overflow-y: auto;"></div>
+                            </div>
+                            <button class="btn-primary" onclick="descargarEstadisticasPDF()" style="background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);">
+                                💾 Descargar PDF de Estadísticas
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para nuevo producto -->
+    <div id="modal-producto" class="modal">
+        <div class="modal-content">
+            <h3>Nuevo Producto</h3>
+            <input type="text" id="producto-nombre" placeholder="Nombre del producto" class="input" oninput="actualizarTipoStock()">
+            <input type="number" id="producto-precio" placeholder="Precio" step="0.01" class="input">
+            <div id="stock-container">
+                <input type="number" id="producto-stock" placeholder="Stock inicial" class="input" step="1">
+                <span id="stock-label" style="font-size: 0.85rem; color: var(--text-light); margin-top: -10px; display: block;">Unidades</span>
+            </div>
+            <div class="modal-buttons">
+                <button class="btn-secondary" onclick="cerrarModal()">Cancelar</button>
+                <button class="btn-primary" onclick="guardarProducto()">Guardar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+        <div class="footer-content">
+            <span class="footer-text">Creado por</span>
+            <img src="images/logo-davinic.png" alt="DaviNic Developer" class="footer-logo" onerror="this.style.display='none';">
+            <span class="footer-brand">DaviNic Developer</span>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
+
