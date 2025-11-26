@@ -578,25 +578,56 @@ let dbInitialized = false;
 let dbInitPromise = null;
 
 // Función para inicializar la base de datos con reintentos
-const inicializarConReintentos = async (maxReintentos = 5, delay = 2000) => {
+const inicializarConReintentos = async (maxReintentos = 10, delay = 3000) => {
+  console.log('🚀 Iniciando proceso de inicialización de base de datos...');
+  console.log('📊 Configuración detectada:', {
+    hasDatabaseUrl: !!process.env.DATABASE_URL,
+    hasPgHost: !!process.env.PGHOST,
+    hasDbHost: !!process.env.DB_HOST
+  });
+  
   for (let intento = 1; intento <= maxReintentos; intento++) {
     try {
       console.log(`🔄 Intento ${intento}/${maxReintentos} de inicializar base de datos...`);
+      
+      // Verificar conexión primero
+      const conexionOk = await verificarConexion();
+      if (!conexionOk) {
+        throw new Error('No se pudo verificar la conexión a PostgreSQL');
+      }
+      
+      // Inicializar tablas
       await initDatabase();
       dbInitialized = true;
       console.log('✅ Base de datos inicializada y lista para usar');
       return true;
     } catch (error) {
       console.error(`❌ Intento ${intento} falló:`, error.message);
+      console.error('Detalles del error:', {
+        code: error.code,
+        detail: error.detail,
+        hint: error.hint,
+        position: error.position
+      });
+      
       if (intento < maxReintentos) {
         console.log(`⏳ Esperando ${delay}ms antes del siguiente intento...`);
         await new Promise(resolve => setTimeout(resolve, delay));
+        // Aumentar el delay progresivamente
+        delay = Math.min(delay * 1.2, 10000);
       } else {
         console.error('❌ Todos los intentos de inicialización fallaron');
-        throw error;
+        console.error('💡 Verifica:');
+        console.error('   1. Que DATABASE_URL esté configurada correctamente');
+        console.error('   2. Que la base de datos PostgreSQL esté corriendo');
+        console.error('   3. Que las credenciales sean correctas');
+        dbInitialized = false;
+        // No lanzar el error, permitir que el servidor inicie pero los endpoints fallarán
+        return false;
       }
     }
   }
+  return false;
 };
 
 // Inicializar al cargar el módulo
