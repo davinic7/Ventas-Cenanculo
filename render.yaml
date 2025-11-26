@@ -16,14 +16,21 @@ services:
         value: 4
       - key: PALABRA_CLAVE_CIERRE
         value: GraciasSanJose
-      # IMPORTANTE: Configurar estas variables en el dashboard de Render
-      # después de crear el servicio de base de datos MySQL
+      # IMPORTANTE: Crear un servicio PostgreSQL en Render
+      # Render automáticamente expone estas variables de entorno:
+      # PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE
+      # El código las detecta automáticamente.
+      # Si prefieres usar nombres personalizados, configura:
       # - key: DB_HOST
-      #   value: tu-host-mysql
+      #   sync: false  # Se configura manualmente en el dashboard
+      # - key: DB_PORT
+      #   sync: false
       # - key: DB_USER
-      #   value: tu-usuario-mysql
+      #   sync: false
       # - key: DB_PASSWORD
-      #   value: tu-password-mysql
+      #   sync: false
       # - key: DB_NAME
-      #   value: CenaculoDB
+      #   sync: false
+      # - key: DB_SSL
+      #   value: "true"  # Requerido para conexiones externas
 
