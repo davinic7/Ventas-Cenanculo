@@ -453,11 +453,11 @@ app.get('/api/eslabones/:id/pedidos', async (req, res) => {
   try {
     const pedidos = await dbAll(`
       SELECT p.*,
-             GROUP_CONCAT(
-               CONCAT(pi.producto_id, ':', pi.cantidad, ':', pi.unidad, ':', 
-                      pr.nombre, ':', pi.total, ':', COALESCE(pr.producto_base_id, ''), ':', 
-                      COALESCE(pr.tipo_venta, ''))
-               SEPARATOR ','
+             STRING_AGG(
+               pi.producto_id::text || ':' || pi.cantidad::text || ':' || pi.unidad || ':' || 
+               pr.nombre || ':' || pi.total::text || ':' || COALESCE(pr.producto_base_id::text, '') || ':' || 
+               COALESCE(pr.tipo_venta::text, ''),
+               ','
              ) as items
       FROM pedidos p
       INNER JOIN pedido_items pi ON p.id = pi.pedido_id
@@ -610,9 +610,9 @@ app.get('/api/pedidos/listos', async (req, res) => {
   try {
     const pedidos = await dbAll(`
       SELECT p.*,
-             GROUP_CONCAT(
-               CONCAT(pi.producto_id, ':', pi.cantidad, ':', pi.unidad, ':', pr.nombre, ':', pi.total)
-               SEPARATOR ','
+             STRING_AGG(
+               pi.producto_id::text || ':' || pi.cantidad::text || ':' || pi.unidad || ':' || pr.nombre || ':' || pi.total::text,
+               ','
              ) as items
       FROM pedidos p
       LEFT JOIN pedido_items pi ON p.id = pi.pedido_id
