@@ -10,4 +10,20 @@ services:
         value: production
       - key: HOST
         value: 0.0.0.0
+      - key: TIMEZONE
+        value: America/Argentina/Buenos_Aires
+      - key: VASOS_POR_BOTELLA
+        value: 4
+      - key: PALABRA_CLAVE_CIERRE
+        value: GraciasSanJose
+      # IMPORTANTE: Configurar estas variables en el dashboard de Render
+      # después de crear el servicio de base de datos MySQL
+      # - key: DB_HOST
+      #   value: tu-host-mysql
+      # - key: DB_USER
+      #   value: tu-usuario-mysql
+      # - key: DB_PASSWORD
+      #   value: tu-password-mysql
+      # - key: DB_NAME
+      #   value: CenaculoDB
 
