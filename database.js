@@ -77,13 +77,22 @@ const dbRun = async (sql, params = []) => {
     }
     
     const result = await client.query(pgSql, pgParams);
-    const lastID = result.rows[0]?.id || 0;
+    
+    // Manejar casos donde result.rows puede ser undefined o vacío
+    const lastID = (result.rows && result.rows.length > 0 && result.rows[0]?.id) || 0;
     
     return { 
       lastID: lastID, 
       changes: result.rowCount || 0,
       insertId: lastID
     };
+  } catch (error) {
+    console.error('Error en dbRun:', {
+      sql: sql.substring(0, 100) + '...',
+      error: error.message,
+      code: error.code
+    });
+    throw error;
   } finally {
     client.release();
   }
@@ -578,23 +587,33 @@ let dbInitialized = false;
 let dbInitPromise = null;
 
 // Función para inicializar la base de datos con reintentos
-const inicializarConReintentos = async (maxReintentos = 10, delay = 3000) => {
+const inicializarConReintentos = async (maxReintentos = 10, delay = 5000) => {
   console.log('🚀 Iniciando proceso de inicialización de base de datos...');
   console.log('📊 Configuración detectada:', {
     hasDatabaseUrl: !!process.env.DATABASE_URL,
     hasPgHost: !!process.env.PGHOST,
-    hasDbHost: !!process.env.DB_HOST
+    hasDbHost: !!process.env.DB_HOST,
+    databaseUrlPreview: process.env.DATABASE_URL ? 
+      process.env.DATABASE_URL.substring(0, 30) + '...' : 'no configurada'
   });
   
   for (let intento = 1; intento <= maxReintentos; intento++) {
     try {
       console.log(`🔄 Intento ${intento}/${maxReintentos} de inicializar base de datos...`);
       
+      // Esperar un poco antes del primer intento para que la BD esté lista
+      if (intento === 1) {
+        console.log('⏳ Esperando 3 segundos para que la base de datos esté lista...');
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+      
       // Verificar conexión primero
+      console.log('🔍 Verificando conexión a PostgreSQL...');
       const conexionOk = await verificarConexion();
       if (!conexionOk) {
         throw new Error('No se pudo verificar la conexión a PostgreSQL');
       }
+      console.log('✅ Conexión verificada, creando tablas...');
       
       // Inicializar tablas
       await initDatabase();
@@ -607,20 +626,22 @@ const inicializarConReintentos = async (maxReintentos = 10, delay = 3000) => {
         code: error.code,
         detail: error.detail,
         hint: error.hint,
-        position: error.position
+        position: error.position,
+        cause: error.cause?.message
       });
       
       if (intento < maxReintentos) {
         console.log(`⏳ Esperando ${delay}ms antes del siguiente intento...`);
         await new Promise(resolve => setTimeout(resolve, delay));
         // Aumentar el delay progresivamente
-        delay = Math.min(delay * 1.2, 10000);
+        delay = Math.min(delay * 1.2, 15000);
       } else {
         console.error('❌ Todos los intentos de inicialización fallaron');
         console.error('💡 Verifica:');
         console.error('   1. Que DATABASE_URL esté configurada correctamente');
         console.error('   2. Que la base de datos PostgreSQL esté corriendo');
         console.error('   3. Que las credenciales sean correctas');
+        console.error('   4. Que la base de datos esté accesible desde Render');
         dbInitialized = false;
         // No lanzar el error, permitir que el servidor inicie pero los endpoints fallarán
         return false;
