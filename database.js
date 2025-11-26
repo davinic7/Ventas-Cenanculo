@@ -2,17 +2,34 @@ const { Pool } = require('pg');
 require('dotenv').config();
 
 // Configuración de conexión a PostgreSQL
-const dbConfig = {
-  host: process.env.DB_HOST || process.env.PGHOST || 'localhost',
-  port: process.env.DB_PORT || process.env.PGPORT || 5432,
-  user: process.env.DB_USER || process.env.PGUSER || 'postgres',
-  password: process.env.DB_PASSWORD || process.env.PGPASSWORD || '',
-  database: process.env.DB_NAME || process.env.PGDATABASE || 'CenaculoDB',
-  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
-  max: 10, // Máximo de conexiones en el pool
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-};
+// Soporta DATABASE_URL (formato estándar de Render) o variables individuales
+let dbConfig;
+
+if (process.env.DATABASE_URL) {
+  // Usar DATABASE_URL si está disponible (formato: postgresql://user:password@host:port/database)
+  dbConfig = {
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DB_SSL === 'true' || process.env.DATABASE_URL.includes('sslmode=require') 
+      ? { rejectUnauthorized: false } 
+      : false,
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
+  };
+} else {
+  // Usar variables individuales como fallback
+  dbConfig = {
+    host: process.env.DB_HOST || process.env.PGHOST || 'localhost',
+    port: process.env.DB_PORT || process.env.PGPORT || 5432,
+    user: process.env.DB_USER || process.env.PGUSER || 'postgres',
+    password: process.env.DB_PASSWORD || process.env.PGPASSWORD || '',
+    database: process.env.DB_NAME || process.env.PGDATABASE || 'CenaculoDB',
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
+  };
+}
 
 // Pool de conexiones
 const pool = new Pool(dbConfig);
