@@ -937,6 +937,27 @@ app.get('/api/auditoria', async (req, res) => {
   }
 });
 
+// Endpoint de verificación de salud
+app.get('/api/health', async (req, res) => {
+  try {
+    // Intentar una query simple para verificar la conexión
+    await dbGet('SELECT 1 as test');
+    res.json({ 
+      status: 'ok', 
+      database: 'connected',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'error', 
+      database: 'disconnected',
+      error: error.message,
+      code: error.code,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 
@@ -944,4 +965,5 @@ server.listen(PORT, HOST, () => {
   console.log(`✅ Servidor corriendo en http://${HOST}:${PORT}`);
   console.log(`📅 Timezone: ${TIMEZONE}`);
   console.log(`🥤 Vasos por botella: ${VASOS_POR_BOTELLA}`);
+  console.log(`🔍 Verifica la conexión en: http://${HOST}:${PORT}/api/health`);
 });

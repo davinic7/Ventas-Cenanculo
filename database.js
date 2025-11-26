@@ -39,6 +39,19 @@ pool.on('error', (err) => {
   console.error('Error inesperado en el pool de PostgreSQL:', err);
 });
 
+// Función para verificar la conexión
+const verificarConexion = async () => {
+  try {
+    const result = await pool.query('SELECT NOW() as tiempo');
+    console.log('✅ Conexión a PostgreSQL verificada:', result.rows[0].tiempo);
+    return true;
+  } catch (error) {
+    console.error('❌ Error verificando conexión a PostgreSQL:', error.message);
+    console.error('Código de error:', error.code);
+    return false;
+  }
+};
+
 // Funciones helper para promesas
 const dbRun = async (sql, params = []) => {
   const client = await pool.connect();
@@ -501,12 +514,24 @@ const initDatabase = async () => {
         EXECUTE FUNCTION update_updated_at_column();
     `);
 
+    // Verificar conexión antes de continuar
+    const conexionOk = await verificarConexion();
+    if (!conexionOk) {
+      throw new Error('No se pudo verificar la conexión a la base de datos');
+    }
+
     // Insertar datos iniciales
     await insertarDatosIniciales();
     
     console.log('✅ Base de datos inicializada correctamente');
   } catch (error) {
     console.error('❌ Error inicializando base de datos:', error);
+    console.error('Detalles del error:', {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      hint: error.hint
+    });
     throw error;
   }
 };
@@ -560,4 +585,4 @@ initDatabase().catch((error) => {
   // pero los endpoints fallarán hasta que la BD esté lista
 });
 
-module.exports = { pool, dbRun, dbGet, dbAll, dbTransaction, initDatabase };
+module.exports = { pool, dbRun, dbGet, dbAll, dbTransaction, initDatabase, verificarConexion };
