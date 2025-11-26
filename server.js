@@ -8,7 +8,7 @@ const multer = require('multer');
 const moment = require('moment-timezone');
 require('dotenv').config();
 
-const { dbRun, dbGet, dbAll, dbTransaction } = require('./database');
+const { dbRun, dbGet, dbAll, dbTransaction, waitForDatabase, isDatabaseReady } = require('./database');
 const { subirComprobante } = require('./config/supabase');
 const { registrarAuditoria } = require('./config/auditoria');
 const { generarCierreDia, generarReporteVentas } = require('./config/pdf');
@@ -90,6 +90,12 @@ wss.on('connection', (ws, req) => {
 // Obtener todos los eslabones
 app.get('/api/eslabones', async (req, res) => {
   try {
+    // Esperar a que la base de datos esté lista
+    const dbReady = await waitForDatabase();
+    if (!dbReady) {
+      return res.status(503).json({ error: 'Base de datos no está lista. Por favor, intenta de nuevo en unos momentos.' });
+    }
+    
     const eslabones = await dbAll('SELECT * FROM eslabones WHERE activo = true ORDER BY nombre');
     res.json(eslabones || []);
   } catch (error) {
@@ -667,6 +673,12 @@ app.put('/api/pedidos/:id/entregado', async (req, res) => {
 // ========== API NOTIFICACIONES ==========
 app.get('/api/notificaciones/:rol', async (req, res) => {
   try {
+    // Esperar a que la base de datos esté lista
+    const dbReady = await waitForDatabase();
+    if (!dbReady) {
+      return res.status(503).json({ error: 'Base de datos no está lista. Por favor, intenta de nuevo en unos momentos.' });
+    }
+    
     const notificaciones = await dbAll(
       'SELECT * FROM notificaciones WHERE rol_destino = ? AND leida = false ORDER BY created_at DESC LIMIT 20',
       [req.params.rol]
@@ -940,11 +952,22 @@ app.get('/api/auditoria', async (req, res) => {
 // Endpoint de verificación de salud
 app.get('/api/health', async (req, res) => {
   try {
+    const dbReady = isDatabaseReady();
+    if (!dbReady) {
+      return res.status(503).json({ 
+        status: 'initializing', 
+        database: 'not_ready',
+        message: 'Base de datos aún se está inicializando',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
     // Intentar una query simple para verificar la conexión
     await dbGet('SELECT 1 as test');
     res.json({ 
       status: 'ok', 
       database: 'connected',
+      initialized: true,
       timestamp: new Date().toISOString()
     });
   } catch (error) {

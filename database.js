@@ -573,16 +573,65 @@ const insertarDatosIniciales = async () => {
   }
 };
 
+// Variable para rastrear el estado de inicialización
+let dbInitialized = false;
+let dbInitPromise = null;
+
+// Función para inicializar la base de datos con reintentos
+const inicializarConReintentos = async (maxReintentos = 5, delay = 2000) => {
+  for (let intento = 1; intento <= maxReintentos; intento++) {
+    try {
+      console.log(`🔄 Intento ${intento}/${maxReintentos} de inicializar base de datos...`);
+      await initDatabase();
+      dbInitialized = true;
+      console.log('✅ Base de datos inicializada y lista para usar');
+      return true;
+    } catch (error) {
+      console.error(`❌ Intento ${intento} falló:`, error.message);
+      if (intento < maxReintentos) {
+        console.log(`⏳ Esperando ${delay}ms antes del siguiente intento...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        console.error('❌ Todos los intentos de inicialización fallaron');
+        throw error;
+      }
+    }
+  }
+};
+
 // Inicializar al cargar el módulo
-initDatabase().catch((error) => {
+dbInitPromise = inicializarConReintentos().catch((error) => {
   console.error('❌ Error crítico inicializando base de datos:', error);
   console.error('Detalles:', {
     message: error.message,
     code: error.code,
-    stack: error.stack
+    detail: error.detail,
+    hint: error.hint
   });
-  // No lanzar el error para que el servidor pueda iniciar
-  // pero los endpoints fallarán hasta que la BD esté lista
+  dbInitialized = false;
 });
 
-module.exports = { pool, dbRun, dbGet, dbAll, dbTransaction, initDatabase, verificarConexion };
+// Función para verificar si la BD está lista
+const isDatabaseReady = () => dbInitialized;
+
+// Función para esperar a que la BD esté lista
+const waitForDatabase = async () => {
+  if (dbInitialized) return true;
+  if (dbInitPromise) {
+    await dbInitPromise;
+    return dbInitialized;
+  }
+  return false;
+};
+
+module.exports = { 
+  pool, 
+  dbRun, 
+  dbGet, 
+  dbAll, 
+  dbTransaction, 
+  initDatabase, 
+  verificarConexion,
+  isDatabaseReady,
+  waitForDatabase
+};
