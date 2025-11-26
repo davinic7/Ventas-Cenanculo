@@ -4,46 +4,74 @@ const bodyParser = require('body-parser');
 const path = require('path');
 const http = require('http');
 const WebSocket = require('ws');
-const { db, dbRun, dbGet, dbAll, dbTransaction } = require('./database');
+const multer = require('multer');
+const moment = require('moment-timezone');
+require('dotenv').config();
+
+const { dbRun, dbGet, dbAll, dbTransaction } = require('./database');
+const { subirComprobante } = require('./config/supabase');
+const { registrarAuditoria } = require('./config/auditoria');
+const { generarCierreDia, generarReporteVentas } = require('./config/pdf');
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+// Configuración
+const TIMEZONE = process.env.TIMEZONE || 'America/Argentina/Buenos_Aires';
+const VASOS_POR_BOTELLA = parseInt(process.env.VASOS_POR_BOTELLA) || 4;
+const PALABRA_CLAVE_CIERRE = process.env.PALABRA_CLAVE_CIERRE || 'GraciasSanJose';
+
 // Middleware
 app.use(cors());
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json({ limit: '10mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Clientes WebSocket conectados por perfil
+// Configurar multer para subida de imágenes
+const upload = multer({ storage: multer.memoryStorage() });
+
+// Clientes WebSocket conectados por rol
 const clients = {
-  vendedor: new Set(),
+  atencion: new Set(),
   cocina: new Set(),
+  parrilla: new Set(),
+  horno: new Set(),
+  bebidas: new Set(),
+  postres: new Set(),
   despacho: new Set()
 };
 
-// Broadcast a todos los clientes de un perfil
-function broadcastToPerfil(perfil, data) {
+// Broadcast a todos los clientes de un rol
+function broadcastToRol(rol, data) {
   const message = JSON.stringify(data);
-  clients[perfil].forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
-    }
+  if (clients[rol]) {
+    clients[rol].forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
+  }
+}
+
+// Broadcast a todos los eslabones de producción
+function broadcastToProduccion(data) {
+  ['cocina', 'parrilla', 'horno', 'bebidas', 'postres'].forEach(rol => {
+    broadcastToRol(rol, data);
   });
 }
 
 // WebSocket connection
 wss.on('connection', (ws, req) => {
-  let perfil = null;
+  let rol = null;
 
   ws.on('message', (message) => {
     try {
       const data = JSON.parse(message);
       if (data.type === 'register') {
-        perfil = data.perfil;
-        if (clients[perfil]) {
-          clients[perfil].add(ws);
+        rol = data.rol;
+        if (clients[rol]) {
+          clients[rol].add(ws);
         }
       }
     } catch (e) {
@@ -52,28 +80,33 @@ wss.on('connection', (ws, req) => {
   });
 
   ws.on('close', () => {
-    if (perfil && clients[perfil]) {
-      clients[perfil].delete(ws);
+    if (rol && clients[rol]) {
+      clients[rol].delete(ws);
     }
   });
 });
 
-// ========== API COCINAS ==========
-// Obtener todas las cocinas
-app.get('/api/cocinas', async (req, res) => {
+// ========== API ESLABONES ==========
+// Obtener todos los eslabones
+app.get('/api/eslabones', async (req, res) => {
   try {
-    const cocinas = await dbAll('SELECT * FROM cocinas WHERE activa = 1');
-    res.json(cocinas);
+    const eslabones = await dbAll('SELECT * FROM eslabones WHERE activo = 1 ORDER BY nombre');
+    res.json(eslabones);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Obtener productos de una cocina
-app.get('/api/cocinas/:id/productos', async (req, res) => {
+// Obtener productos de un eslabón
+app.get('/api/eslabones/:id/productos', async (req, res) => {
   try {
     const productos = await dbAll(
-      'SELECT * FROM productos WHERE cocina_id = ? AND activo = 1',
+      `SELECT p.*, c.nombre as categoria_nombre, e.nombre as eslabon_nombre
+       FROM productos p
+       LEFT JOIN categorias c ON p.categoria_id = c.id
+       LEFT JOIN eslabones e ON p.eslabon_id = e.id
+       WHERE p.eslabon_id = ? AND p.activo = 1
+       ORDER BY p.nombre`,
       [req.params.id]
     );
     res.json(productos);
@@ -82,27 +115,32 @@ app.get('/api/cocinas/:id/productos', async (req, res) => {
   }
 });
 
-// Crear producto
-app.post('/api/cocinas/:id/productos', async (req, res) => {
+// Crear producto en eslabón
+app.post('/api/eslabones/:id/productos', async (req, res) => {
   try {
-    const { nombre, precio, stock } = req.body;
+    const { nombre, descripcion, precio, stock, categoria_id, unidad_venta, tipo_venta, producto_base_id, variantes } = req.body;
+    const rol = req.headers['x-rol'] || 'sistema';
+    
     const result = await dbRun(
-      'INSERT INTO productos (cocina_id, nombre, precio, stock) VALUES (?, ?, ?, ?)',
-      [req.params.id, nombre, precio, stock || 0]
+      `INSERT INTO productos (eslabon_id, categoria_id, nombre, descripcion, precio, stock, unidad_venta, tipo_venta, producto_base_id, variantes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        req.params.id,
+        categoria_id || null,
+        nombre,
+        descripcion || null,
+        precio,
+        stock || 0,
+        unidad_venta || 'unidad',
+        tipo_venta || 'unidad',
+        producto_base_id || null,
+        variantes ? JSON.stringify(variantes) : null
+      ]
     );
-    res.json({ id: result.lastID, nombre, precio, stock: stock || 0 });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Obtener un producto
-app.get('/api/productos/:id', async (req, res) => {
-  try {
-    const producto = await dbGet('SELECT * FROM productos WHERE id = ?', [req.params.id]);
-    if (!producto) {
-      return res.status(404).json({ error: 'Producto no encontrado' });
-    }
+    
+    await registrarAuditoria(rol, 'CREAR_PRODUCTO', 'productos', result.lastID, null, { nombre, precio, stock });
+    
+    const producto = await dbGet('SELECT * FROM productos WHERE id = ?', [result.lastID]);
     res.json(producto);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -112,195 +150,344 @@ app.get('/api/productos/:id', async (req, res) => {
 // Actualizar producto
 app.put('/api/productos/:id', async (req, res) => {
   try {
-    const { nombre, precio, stock } = req.body;
-    await dbRun(
-      'UPDATE productos SET nombre = ?, precio = ?, stock = ? WHERE id = ?',
-      [nombre, precio, stock, req.params.id]
+    const { nombre, descripcion, precio, stock, categoria_id, unidad_venta, tipo_venta, producto_base_id, variantes } = req.body;
+    const rol = req.headers['x-rol'] || 'sistema';
+    
+    // Obtener datos anteriores para auditoría
+    const productoAnterior = await dbGet('SELECT * FROM productos WHERE id = ?', [req.params.id]);
+    if (!productoAnterior) {
+      return res.status(404).json({ error: 'Producto no encontrado' });
+    }
+    
+    const updates = [];
+    const params = [];
+    
+    if (nombre !== undefined) { updates.push('nombre = ?'); params.push(nombre); }
+    if (descripcion !== undefined) { updates.push('descripcion = ?'); params.push(descripcion); }
+    if (precio !== undefined) { updates.push('precio = ?'); params.push(precio); }
+    if (stock !== undefined) { updates.push('stock = ?'); params.push(stock); }
+    if (categoria_id !== undefined) { updates.push('categoria_id = ?'); params.push(categoria_id); }
+    if (unidad_venta !== undefined) { updates.push('unidad_venta = ?'); params.push(unidad_venta); }
+    if (tipo_venta !== undefined) { updates.push('tipo_venta = ?'); params.push(tipo_venta); }
+    if (producto_base_id !== undefined) { updates.push('producto_base_id = ?'); params.push(producto_base_id); }
+    if (variantes !== undefined) { updates.push('variantes = ?'); params.push(variantes ? JSON.stringify(variantes) : null); }
+    
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No se proporcionaron campos para actualizar' });
+    }
+    
+    params.push(req.params.id);
+    await dbRun(`UPDATE productos SET ${updates.join(', ')} WHERE id = ?`, params);
+    
+    const productoNuevo = await dbGet('SELECT * FROM productos WHERE id = ?', [req.params.id]);
+    await registrarAuditoria(rol, 'ACTUALIZAR_PRODUCTO', 'productos', req.params.id, productoAnterior, productoNuevo);
+    
+    res.json({ success: true, producto: productoNuevo });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Eliminar producto (soft delete)
+app.delete('/api/productos/:id', async (req, res) => {
+  try {
+    const rol = req.headers['x-rol'] || 'sistema';
+    const producto = await dbGet('SELECT * FROM productos WHERE id = ?', [req.params.id]);
+    
+    if (!producto) {
+      return res.status(404).json({ error: 'Producto no encontrado' });
+    }
+    
+    await dbRun('UPDATE productos SET activo = 0 WHERE id = ?', [req.params.id]);
+    await registrarAuditoria(rol, 'ELIMINAR_PRODUCTO', 'productos', req.params.id, producto, null);
+    
+    res.json({ success: true, message: 'Producto eliminado correctamente' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Obtener un producto
+app.get('/api/productos/:id', async (req, res) => {
+  try {
+    const producto = await dbGet(
+      `SELECT p.*, c.nombre as categoria_nombre, e.nombre as eslabon_nombre
+       FROM productos p
+       LEFT JOIN categorias c ON p.categoria_id = c.id
+       LEFT JOIN eslabones e ON p.eslabon_id = e.id
+       WHERE p.id = ?`,
+      [req.params.id]
     );
-    res.json({ success: true });
+    
+    if (!producto) {
+      return res.status(404).json({ error: 'Producto no encontrado' });
+    }
+    
+    if (producto.variantes) {
+      producto.variantes = JSON.parse(producto.variantes);
+    }
+    
+    res.json(producto);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ========== API CATEGORÍAS ==========
+app.get('/api/categorias', async (req, res) => {
+  try {
+    const categorias = await dbAll('SELECT * FROM categorias WHERE activa = 1 ORDER BY nombre');
+    res.json(categorias);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 // ========== API PEDIDOS ==========
-// Crear pedido (Vendedor)
-// Constante: vasos por botella
-const VASOS_POR_BOTELLA = 4;
-
-// Función auxiliar para obtener el nombre base de una bebida
-function obtenerNombreBaseBebida(nombre) {
-  // Remover " - Vaso", " - Botella", " Vaso", " Botella"
-  return nombre.replace(/\s*-\s*(vaso|botella)/i, '').replace(/\s+(vaso|botella)/i, '').trim();
-}
-
-// Función para encontrar el producto botella correspondiente a un producto vaso
-async function encontrarProductoBotella(productoVaso) {
-  const nombreBase = obtenerNombreBaseBebida(productoVaso.nombre);
-  // Buscar producto botella con el mismo nombre base
-  const productoBotella = await dbGet(
-    `SELECT id, stock, nombre FROM productos 
-     WHERE nombre LIKE ? AND (nombre LIKE '%botella%' OR nombre LIKE '%Botella%')
-     LIMIT 1`,
-    [`%${nombreBase}%`]
-  );
-  return productoBotella;
-}
-
-app.post('/api/pedidos', async (req, res) => {
+// Crear pedido (Atención)
+app.post('/api/pedidos', upload.single('comprobante'), async (req, res) => {
   try {
-    const { nombre_cliente, items, promociones, medio_pago, vendedor_id, foto_comprobante } = req.body;
+    const { nombre_cliente, items, promociones, medio_pago, rol_atencion } = req.body;
     
-    // Validar stock antes de procesar (solo para productos que NO son vasos)
+    // Subir comprobante si existe
+    let comprobanteUrl = null;
+    if (req.file && medio_pago === 'transferencia') {
+      try {
+        comprobanteUrl = await subirComprobante(
+          req.file.buffer,
+          req.file.originalname,
+          req.file.mimetype
+        );
+      } catch (error) {
+        console.error('Error subiendo comprobante:', error);
+        return res.status(500).json({ error: 'Error al subir el comprobante' });
+      }
+    }
+    
+    // Validar stock antes de procesar
     for (const item of items) {
-      const producto = await dbGet('SELECT stock, nombre, id FROM productos WHERE id = ?', [item.producto_id]);
+      const producto = await dbGet(
+        'SELECT stock, nombre, id, tipo_venta, producto_base_id, eslabon_id FROM productos WHERE id = ?',
+        [item.producto_id]
+      );
+      
       if (!producto) {
         return res.status(400).json({ error: `Producto con ID ${item.producto_id} no encontrado` });
       }
       
-      const esVaso = producto.nombre.toLowerCase().includes('vaso');
+      // No validar stock para vasos (tienen producto_base_id)
+      const esVaso = producto.producto_base_id !== null || producto.tipo_venta === 'vaso';
       
-      // No validar stock para vasos (no existe stock de vasos, solo de botellas)
       if (!esVaso) {
-        // Si es botella u otro producto, validar normalmente
-        if (producto.stock < item.cantidad) {
-          return res.status(400).json({ 
-            error: `Stock insuficiente para ${producto.nombre}. Disponible: ${producto.stock}, Solicitado: ${item.cantidad}` 
+        let cantidadRequerida = parseFloat(item.cantidad);
+        
+        // Convertir según tipo de venta
+        if (producto.tipo_venta === 'docena') {
+          cantidadRequerida = cantidadRequerida * 12;
+        } else if (producto.tipo_venta === 'media_docena') {
+          cantidadRequerida = cantidadRequerida * 6;
+        }
+        
+        if (parseFloat(producto.stock) < cantidadRequerida) {
+          return res.status(400).json({
+            error: `Stock insuficiente para ${producto.nombre}. Disponible: ${producto.stock}, Solicitado: ${cantidadRequerida}`
           });
         }
       }
     }
     
-    // Agrupar items por cocina
-    const itemsPorCocina = {};
-    for (const item of items) {
-      const producto = await dbGet('SELECT cocina_id FROM productos WHERE id = ?', [item.producto_id]);
-      if (!producto) continue;
-      
-      if (!itemsPorCocina[producto.cocina_id]) {
-        itemsPorCocina[producto.cocina_id] = [];
+    // Calcular total del pedido
+    let totalPedido = 0;
+    
+    // Calcular total de promociones si hay
+    if (promociones && promociones.length > 0) {
+      for (const promo of promociones) {
+        totalPedido += parseFloat(promo.precio) * parseInt(promo.cantidad);
       }
-      itemsPorCocina[producto.cocina_id].push(item);
+    } else {
+      // Calcular total de items normales
+      for (const item of items) {
+        const producto = await dbGet('SELECT precio FROM productos WHERE id = ?', [item.producto_id]);
+        totalPedido += parseFloat(producto.precio) * parseFloat(item.cantidad);
+      }
     }
-
-    // Crear un pedido por cada cocina
-    const pedidosCreados = [];
-    for (const [cocina_id, itemsCocina] of Object.entries(itemsPorCocina)) {
-      const pedidoResult = await dbRun(
-        'INSERT INTO pedidos (nombre_cliente, vendedor_id, cocina_id, estado) VALUES (?, ?, ?, ?)',
-        [nombre_cliente, vendedor_id || 'vendedor1', cocina_id, 'pendiente']
+    
+    // Crear pedido único (no por eslabón, todos los items en un solo pedido)
+    const pedidoResult = await dbRun(
+      `INSERT INTO pedidos (nombre_cliente, rol_atencion, estado, medio_pago, comprobante_url, total)
+       VALUES (?, ?, 'tomado', ?, ?, ?)`,
+      [nombre_cliente, rol_atencion || 'atencion', medio_pago, comprobanteUrl, totalPedido]
+    );
+    
+    const pedidoId = pedidoResult.lastID;
+    
+    // Agrupar items por eslabón para notificaciones
+    const itemsPorEslabon = {};
+    
+    // Insertar items del pedido
+    for (const item of items) {
+      const producto = await dbGet(
+        'SELECT precio, nombre, id, eslabon_id, tipo_venta FROM productos WHERE id = ?',
+        [item.producto_id]
       );
       
-      let totalPedido = 0;
-      for (const item of itemsCocina) {
-        const producto = await dbGet('SELECT precio, nombre, id FROM productos WHERE id = ?', [item.producto_id]);
-        const totalItem = producto.precio * item.cantidad;
-        totalPedido += totalItem;
+      const precioUnitario = parseFloat(producto.precio);
+      const cantidad = parseFloat(item.cantidad);
+      const totalItem = precioUnitario * cantidad;
+      
+      await dbRun(
+        `INSERT INTO pedido_items (pedido_id, producto_id, eslabon_id, cantidad, unidad, precio_unitario, total)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          pedidoId,
+          item.producto_id,
+          producto.eslabon_id,
+          cantidad,
+          item.unidad || producto.tipo_venta || 'unidad',
+          precioUnitario,
+          totalItem
+        ]
+      );
+      
+      // Agrupar por eslabón
+      if (!itemsPorEslabon[producto.eslabon_id]) {
+        itemsPorEslabon[producto.eslabon_id] = [];
+      }
+      itemsPorEslabon[producto.eslabon_id].push(producto);
+      
+      // Actualizar stock (excepto vasos)
+      const esVaso = producto.producto_base_id !== null || producto.tipo_venta === 'vaso';
+      if (!esVaso) {
+        let cantidadADescontar = cantidad;
+        
+        if (producto.tipo_venta === 'docena') {
+          cantidadADescontar = cantidad * 12;
+        } else if (producto.tipo_venta === 'media_docena') {
+          cantidadADescontar = cantidad * 6;
+        }
+        
+        await dbRun('UPDATE productos SET stock = stock - ? WHERE id = ?', [cantidadADescontar, item.producto_id]);
+      }
+    }
+    
+    // Registrar ventas
+    if (promociones && promociones.length > 0) {
+      // Si hay promociones, TODO el pedido se cobra con precio de promoción
+      for (const promo of promociones) {
+        const primerItem = items[0];
+        await dbRun(
+          `INSERT INTO ventas (pedido_id, producto_id, producto_nombre, cantidad, precio_unitario, total_producto, medio_pago, total_venta, comprobante_url, es_promocion, promocion_nombre, promocion_precio)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            pedidoId,
+            primerItem.producto_id,
+            promo.nombre,
+            promo.cantidad,
+            promo.precio,
+            promo.precio * promo.cantidad,
+            medio_pago,
+            totalPedido,
+            comprobanteUrl,
+            1,
+            promo.nombre,
+            promo.precio
+          ]
+        );
+      }
+    } else {
+      // Registrar cada item como venta
+      for (const item of items) {
+        const producto = await dbGet('SELECT nombre, precio FROM productos WHERE id = ?', [item.producto_id]);
+        const totalProducto = parseFloat(producto.precio) * parseFloat(item.cantidad);
         
         await dbRun(
-          'INSERT INTO pedido_items (pedido_id, producto_id, cantidad, precio_unitario, total) VALUES (?, ?, ?, ?, ?)',
-          [pedidoResult.lastID, item.producto_id, item.cantidad, producto.precio, totalItem]
+          `INSERT INTO ventas (pedido_id, producto_id, producto_nombre, cantidad, precio_unitario, total_producto, medio_pago, total_venta, comprobante_url, es_promocion)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            pedidoId,
+            item.producto_id,
+            producto.nombre,
+            item.cantidad,
+            producto.precio,
+            totalProducto,
+            medio_pago,
+            totalPedido,
+            comprobanteUrl,
+            0
+          ]
+        );
+      }
+    }
+    
+    // Crear notificaciones para cada eslabón
+    for (const [eslabonId, productosEslabon] of Object.entries(itemsPorEslabon)) {
+      const eslabon = await dbGet('SELECT nombre, tipo FROM eslabones WHERE id = ?', [eslabonId]);
+      if (eslabon) {
+        const rolEslabon = eslabon.tipo; // cocina, parrilla, horno, bebidas, postres
+        
+        await dbRun(
+          'INSERT INTO notificaciones (tipo, rol_destino, mensaje, pedido_id) VALUES (?, ?, ?, ?)',
+          [
+            'nuevo_pedido',
+            rolEslabon,
+            `Nuevo pedido de ${nombre_cliente} para ${eslabon.nombre}`,
+            pedidoId
+          ]
         );
         
-        // Actualizar stock (solo para productos que NO son vasos)
-        const esVaso = producto.nombre.toLowerCase().includes('vaso');
-        if (!esVaso) {
-          // Si es botella u otro producto, descontar normalmente
-          await dbRun('UPDATE productos SET stock = stock - ? WHERE id = ?', [item.cantidad, item.producto_id]);
-        }
-        // Los vasos NO descuentan stock automáticamente - se descuenta manualmente desde cocina
+        broadcastToRol(rolEslabon, { type: 'nuevo_pedido', pedido_id: pedidoId });
       }
-
-      // Registrar ventas
-      // Primero, identificar qué items pertenecen a promociones
-      const itemsEnPromociones = new Set();
-      let totalPromociones = 0;
-      
-      if (promociones && promociones.length > 0) {
-        for (const promo of promociones) {
-          // Verificar si esta promoción tiene items en esta cocina
-          const itemsPromoEnCocina = [];
-          for (const promoItem of promo.items) {
-            const productoPromo = await dbGet('SELECT cocina_id FROM productos WHERE id = ?', [promoItem.producto_id]);
-            if (productoPromo && productoPromo.cocina_id == cocina_id) {
-              itemsPromoEnCocina.push(promoItem);
-              itemsEnPromociones.add(promoItem.producto_id);
-            }
-          }
-          
-          // Si hay items de esta promoción en esta cocina, registrar la promoción
-          if (itemsPromoEnCocina.length > 0) {
-            const totalPromo = promo.precio * promo.cantidad;
-            totalPromociones += totalPromo;
-            
-            // Registrar la promoción como una venta especial
-            // Usar el primer producto_id como referencia, pero marcar como promoción
-            const primerProductoId = itemsPromoEnCocina[0].producto_id;
-            await dbRun(
-              `INSERT INTO ventas (pedido_id, producto_id, producto_nombre, cantidad, precio_unitario, total_producto, medio_pago, total_venta, foto_comprobante, es_promocion, promocion_nombre, promocion_precio)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [pedidoResult.lastID, primerProductoId, promo.nombre, promo.cantidad, promo.precio, totalPromo, medio_pago, totalPromo, foto_comprobante || null, 1, promo.nombre, promo.precio]
-            );
-          }
-        }
-      }
-      
-      // Registrar ventas de productos normales (que no están en promociones)
-      for (const item of itemsCocina) {
-        // Solo registrar si no está en una promoción
-        if (!itemsEnPromociones.has(item.producto_id)) {
-          const producto = await dbGet('SELECT nombre, precio FROM productos WHERE id = ?', [item.producto_id]);
-          const totalProducto = producto.precio * item.cantidad;
-          
-          await dbRun(
-            `INSERT INTO ventas (pedido_id, producto_id, producto_nombre, cantidad, precio_unitario, total_producto, medio_pago, total_venta, foto_comprobante, es_promocion, promocion_nombre, promocion_precio)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [pedidoResult.lastID, item.producto_id, producto.nombre, item.cantidad, producto.precio, totalProducto, medio_pago, totalPedido, foto_comprobante || null, 0, null, null]
-          );
-        }
-      }
-
-      // Crear notificación para cocina
-      const cocina = await dbGet('SELECT nombre FROM cocinas WHERE id = ?', [cocina_id]);
-      await dbRun(
-        'INSERT INTO notificaciones (tipo, perfil_destino, mensaje, pedido_id) VALUES (?, ?, ?, ?)',
-        ['nuevo_pedido', 'cocina', `Nuevo pedido de ${nombre_cliente} para ${cocina.nombre}`, pedidoResult.lastID]
-      );
-
-      pedidosCreados.push(pedidoResult.lastID);
     }
-
-    // Notificar a cocinas
-    broadcastToPerfil('cocina', { type: 'nuevo_pedido', pedidos: pedidosCreados });
-
-    res.json({ success: true, pedidos: pedidosCreados });
+    
+    await registrarAuditoria(rol_atencion || 'atencion', 'CREAR_PEDIDO', 'pedidos', pedidoId, null, { nombre_cliente, total: totalPedido });
+    
+    res.json({ success: true, pedido_id: pedidoId });
   } catch (error) {
+    console.error('Error creando pedido:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Obtener pedidos por cocina
-app.get('/api/cocinas/:id/pedidos', async (req, res) => {
+// Obtener pedidos por eslabón
+app.get('/api/eslabones/:id/pedidos', async (req, res) => {
   try {
     const pedidos = await dbAll(`
-      SELECT p.*, 
-             GROUP_CONCAT(pi.producto_id || ':' || pi.cantidad || ':' || pr.nombre || ':' || pi.total) as items
+      SELECT p.*,
+             GROUP_CONCAT(
+               CONCAT(pi.producto_id, ':', pi.cantidad, ':', pi.unidad, ':', 
+                      pr.nombre, ':', pi.total, ':', COALESCE(pr.producto_base_id, ''), ':', 
+                      COALESCE(pr.tipo_venta, ''))
+               SEPARATOR ','
+             ) as items
       FROM pedidos p
-      LEFT JOIN pedido_items pi ON p.id = pi.pedido_id
-      LEFT JOIN productos pr ON pi.producto_id = pr.id
-      WHERE p.cocina_id = ? AND p.estado IN ('pendiente', 'en_preparacion')
+      INNER JOIN pedido_items pi ON p.id = pi.pedido_id
+      INNER JOIN productos pr ON pi.producto_id = pr.id
+      WHERE pi.eslabon_id = ? AND p.estado IN ('tomado', 'en_preparacion')
       GROUP BY p.id
       ORDER BY p.created_at ASC
     `, [req.params.id]);
     
-    // Formatear items
-    const pedidosFormateados = pedidos.map(p => ({
-      ...p,
-      items: p.items ? p.items.split(',').map(item => {
-        const [producto_id, cantidad, nombre, total] = item.split(':');
-        return { producto_id, cantidad: parseInt(cantidad), nombre, total: parseFloat(total) };
-      }) : []
-    }));
+    const pedidosFormateados = pedidos.map(p => {
+      const items = p.items ? p.items.split(',').map(item => {
+        const [producto_id, cantidad, unidad, nombre, total, producto_base_id, tipo_venta] = item.split(':');
+        const esVaso = producto_base_id !== '' || tipo_venta === 'vaso';
+        return {
+          producto_id: parseInt(producto_id),
+          cantidad: parseFloat(cantidad),
+          unidad,
+          nombre,
+          total: parseFloat(total),
+          producto_base_id: producto_base_id || null,
+          tipo_venta: tipo_venta || null,
+          es_vaso: esVaso
+        };
+      }) : [];
+      
+      return {
+        ...p,
+        items
+      };
+    });
     
     res.json(pedidosFormateados);
   } catch (error) {
@@ -308,66 +495,110 @@ app.get('/api/cocinas/:id/pedidos', async (req, res) => {
   }
 });
 
-// Actualizar estado de pedido (Cocina)
+// Actualizar estado de pedido (Producción)
 app.put('/api/pedidos/:id/estado', async (req, res) => {
   try {
     const { estado } = req.body;
+    const rol = req.headers['x-rol'] || 'sistema';
+    
+    const estadosValidos = ['tomado', 'en_preparacion', 'listo', 'entregado', 'cancelado'];
+    if (!estadosValidos.includes(estado)) {
+      return res.status(400).json({ error: 'Estado inválido' });
+    }
+    
+    const pedidoAnterior = await dbGet('SELECT * FROM pedidos WHERE id = ?', [req.params.id]);
+    if (!pedidoAnterior) {
+      return res.status(404).json({ error: 'Pedido no encontrado' });
+    }
+    
     await dbRun(
       'UPDATE pedidos SET estado = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
       [estado, req.params.id]
     );
-
+    
+    await registrarAuditoria(rol, 'ACTUALIZAR_ESTADO_PEDIDO', 'pedidos', req.params.id, pedidoAnterior, { estado });
+    
     if (estado === 'listo') {
       // Notificar a despacho
-      const pedido = await dbGet('SELECT nombre_cliente FROM pedidos WHERE id = ?', [req.params.id]);
       await dbRun(
-        'INSERT INTO notificaciones (tipo, perfil_destino, mensaje, pedido_id) VALUES (?, ?, ?, ?)',
-        ['pedido_listo', 'despacho', `Pedido de ${pedido.nombre_cliente} listo para despacho`, req.params.id]
+        'INSERT INTO notificaciones (tipo, rol_destino, mensaje, pedido_id) VALUES (?, ?, ?, ?)',
+        ['pedido_listo', 'despacho', `Pedido de ${pedidoAnterior.nombre_cliente} listo para despacho`, req.params.id]
       );
       
-      broadcastToPerfil('despacho', { type: 'pedido_listo', pedido_id: req.params.id });
+      broadcastToRol('despacho', { type: 'pedido_listo', pedido_id: req.params.id });
+    } else if (estado === 'entregado') {
+      await dbRun(
+        'UPDATE pedidos SET entregado_at = CURRENT_TIMESTAMP WHERE id = ?',
+        [req.params.id]
+      );
+      
+      // Notificar a atención
+      await dbRun(
+        'INSERT INTO notificaciones (tipo, rol_destino, mensaje, pedido_id) VALUES (?, ?, ?, ?)',
+        ['pedido_entregado', 'atencion', `Pedido de ${pedidoAnterior.nombre_cliente} entregado`, req.params.id]
+      );
+      
+      broadcastToRol('atencion', { type: 'pedido_entregado', pedido_id: req.params.id });
     }
-
+    
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Descontar botella para vasos (Cocina)
+// Descontar botella para vasos (Producción)
 app.post('/api/pedidos/:id/descontar-botella', async (req, res) => {
   try {
     const { producto_vaso_id, cantidad_vasos } = req.body;
+    const rol = req.headers['x-rol'] || 'sistema';
     
-    // Obtener el producto vaso
-    const productoVaso = await dbGet('SELECT nombre FROM productos WHERE id = ?', [producto_vaso_id]);
+    const productoVaso = await dbGet('SELECT id, nombre, producto_base_id, tipo_venta FROM productos WHERE id = ?', [producto_vaso_id]);
     if (!productoVaso) {
       return res.status(400).json({ error: 'Producto vaso no encontrado' });
     }
     
-    // Encontrar el producto botella correspondiente
-    const productoBotella = await encontrarProductoBotella(productoVaso);
-    if (!productoBotella) {
-      return res.status(400).json({ error: 'No se encontró el producto botella correspondiente' });
+    // Buscar botella base
+    let productoBotella = null;
+    if (productoVaso.producto_base_id) {
+      productoBotella = await dbGet('SELECT id, stock, nombre FROM productos WHERE id = ? AND activo = 1', [productoVaso.producto_base_id]);
     }
     
-    // Calcular botellas necesarias (redondear hacia arriba)
+    if (!productoBotella) {
+      return res.status(400).json({ error: 'No se encontró la botella base para este vaso' });
+    }
+    
     const botellasNecesarias = Math.ceil(cantidad_vasos / VASOS_POR_BOTELLA);
     
-    // Validar stock
-    if (productoBotella.stock < botellasNecesarias) {
-      return res.status(400).json({ 
-        error: `Stock insuficiente. Disponible: ${productoBotella.stock} botellas, Necesario: ${botellasNecesarias} botellas` 
+    if (parseFloat(productoBotella.stock) < botellasNecesarias) {
+      return res.status(400).json({
+        error: `Stock insuficiente. Disponible: ${productoBotella.stock} botellas, Necesario: ${botellasNecesarias} botellas`
       });
     }
     
-    // Descontar botellas
     await dbRun('UPDATE productos SET stock = stock - ? WHERE id = ?', [botellasNecesarias, productoBotella.id]);
     
-    res.json({ 
-      success: true, 
+    const productoBotellaActualizado = await dbGet('SELECT stock FROM productos WHERE id = ?', [productoBotella.id]);
+    
+    // Avisar si queda 1 botella
+    if (parseFloat(productoBotellaActualizado.stock) <= 1) {
+      broadcastToRol('bebidas', {
+        type: 'alerta_stock',
+        mensaje: `⚠️ Alerta: Queda ${productoBotellaActualizado.stock} botella(s) de ${productoBotella.nombre}`,
+        producto_id: productoBotella.id
+      });
+    }
+    
+    await registrarAuditoria(rol, 'DESCONTAR_BOTELLA', 'productos', productoBotella.id, 
+      { stock: productoBotella.stock }, 
+      { stock: productoBotellaActualizado.stock });
+    
+    res.json({
+      success: true,
       botellas_descontadas: botellasNecesarias,
-      stock_restante: productoBotella.stock - botellasNecesarias
+      stock_restante: productoBotellaActualizado.stock,
+      botella_nombre: productoBotella.nombre,
+      alerta: parseFloat(productoBotellaActualizado.stock) <= 1
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -378,10 +609,12 @@ app.post('/api/pedidos/:id/descontar-botella', async (req, res) => {
 app.get('/api/pedidos/listos', async (req, res) => {
   try {
     const pedidos = await dbAll(`
-      SELECT p.*, c.nombre as cocina_nombre,
-             GROUP_CONCAT(pi.producto_id || ':' || pi.cantidad || ':' || pr.nombre || ':' || pi.total) as items
+      SELECT p.*,
+             GROUP_CONCAT(
+               CONCAT(pi.producto_id, ':', pi.cantidad, ':', pi.unidad, ':', pr.nombre, ':', pi.total)
+               SEPARATOR ','
+             ) as items
       FROM pedidos p
-      LEFT JOIN cocinas c ON p.cocina_id = c.id
       LEFT JOIN pedido_items pi ON p.id = pi.pedido_id
       LEFT JOIN productos pr ON pi.producto_id = pr.id
       WHERE p.estado = 'listo'
@@ -392,39 +625,14 @@ app.get('/api/pedidos/listos', async (req, res) => {
     const pedidosFormateados = pedidos.map(p => ({
       ...p,
       items: p.items ? p.items.split(',').map(item => {
-        const [producto_id, cantidad, nombre, total] = item.split(':');
-        return { producto_id, cantidad: parseInt(cantidad), nombre, total: parseFloat(total) };
-      }) : []
-    }));
-    
-    res.json(pedidosFormateados);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Obtener pedidos entregados (Historial Despacho)
-app.get('/api/pedidos/entregados', async (req, res) => {
-  try {
-    const { limite = 50 } = req.query;
-    const pedidos = await dbAll(`
-      SELECT p.*, c.nombre as cocina_nombre,
-             GROUP_CONCAT(pi.producto_id || ':' || pi.cantidad || ':' || pr.nombre || ':' || pi.total) as items
-      FROM pedidos p
-      LEFT JOIN cocinas c ON p.cocina_id = c.id
-      LEFT JOIN pedido_items pi ON p.id = pi.pedido_id
-      LEFT JOIN productos pr ON pi.producto_id = pr.id
-      WHERE p.estado = 'entregado'
-      GROUP BY p.id
-      ORDER BY p.updated_at DESC
-      LIMIT ?
-    `, [limite]);
-    
-    const pedidosFormateados = pedidos.map(p => ({
-      ...p,
-      items: p.items ? p.items.split(',').map(item => {
-        const [producto_id, cantidad, nombre, total] = item.split(':');
-        return { producto_id, cantidad: parseInt(cantidad), nombre, total: parseFloat(total) };
+        const [producto_id, cantidad, unidad, nombre, total] = item.split(':');
+        return {
+          producto_id: parseInt(producto_id),
+          cantidad: parseFloat(cantidad),
+          unidad,
+          nombre,
+          total: parseFloat(total)
+        };
       }) : []
     }));
     
@@ -437,20 +645,18 @@ app.get('/api/pedidos/entregados', async (req, res) => {
 // Marcar pedido como entregado (Despacho)
 app.put('/api/pedidos/:id/entregado', async (req, res) => {
   try {
+    const rol = req.headers['x-rol'] || 'despacho';
+    
     await dbRun(
-      'UPDATE pedidos SET estado = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      'UPDATE pedidos SET estado = ?, entregado_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
       ['entregado', req.params.id]
     );
-
-    // Notificar a vendedor
-    const pedido = await dbGet('SELECT nombre_cliente FROM pedidos WHERE id = ?', [req.params.id]);
-    await dbRun(
-      'INSERT INTO notificaciones (tipo, perfil_destino, mensaje, pedido_id) VALUES (?, ?, ?, ?)',
-      ['pedido_entregado', 'vendedor', `Pedido de ${pedido.nombre_cliente} entregado`, req.params.id]
-    );
     
-    broadcastToPerfil('vendedor', { type: 'pedido_entregado', pedido_id: req.params.id });
-
+    const pedido = await dbGet('SELECT nombre_cliente FROM pedidos WHERE id = ?', [req.params.id]);
+    await registrarAuditoria(rol, 'ENTREGAR_PEDIDO', 'pedidos', req.params.id, null, { estado: 'entregado' });
+    
+    broadcastToRol('atencion', { type: 'pedido_entregado', pedido_id: req.params.id });
+    
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -458,11 +664,11 @@ app.put('/api/pedidos/:id/entregado', async (req, res) => {
 });
 
 // ========== API NOTIFICACIONES ==========
-app.get('/api/notificaciones/:perfil', async (req, res) => {
+app.get('/api/notificaciones/:rol', async (req, res) => {
   try {
     const notificaciones = await dbAll(
-      'SELECT * FROM notificaciones WHERE perfil_destino = ? AND leida = 0 ORDER BY created_at DESC LIMIT 20',
-      [req.params.perfil]
+      'SELECT * FROM notificaciones WHERE rol_destino = ? AND leida = 0 ORDER BY created_at DESC LIMIT 20',
+      [req.params.rol]
     );
     res.json(notificaciones);
   } catch (error) {
@@ -479,12 +685,12 @@ app.put('/api/notificaciones/:id/leida', async (req, res) => {
   }
 });
 
-// ========== API VENTAS (Historial) ==========
+// ========== API VENTAS ==========
 app.get('/api/ventas', async (req, res) => {
   try {
     const { fecha_inicio, fecha_fin } = req.query;
     let query = `
-      SELECT v.*, p.nombre_cliente, p.created_at as pedido_fecha, v.foto_comprobante
+      SELECT v.*, p.nombre_cliente, p.created_at as pedido_fecha, p.comprobante_url
       FROM ventas v
       LEFT JOIN pedidos p ON v.pedido_id = p.id
       WHERE 1=1
@@ -492,15 +698,15 @@ app.get('/api/ventas', async (req, res) => {
     const params = [];
 
     if (fecha_inicio) {
-      query += ' AND v.fecha >= ?';
+      query += ' AND DATE(v.fecha) >= ?';
       params.push(fecha_inicio);
     }
     if (fecha_fin) {
-      query += ' AND v.fecha <= ?';
+      query += ' AND DATE(v.fecha) <= ?';
       params.push(fecha_fin);
     }
 
-    query += ' ORDER BY v.fecha DESC, p.nombre_cliente ASC LIMIT 500';
+    query += ' ORDER BY v.fecha DESC LIMIT 500';
     
     const ventas = await dbAll(query, params);
     res.json(ventas);
@@ -509,310 +715,221 @@ app.get('/api/ventas', async (req, res) => {
   }
 });
 
-// ========== API PROMOCIONES ==========
-// Obtener todas las promociones activas
-app.get('/api/promociones', async (req, res) => {
+// ========== API CIERRE DE DÍA ==========
+app.post('/api/cierre-dia', async (req, res) => {
   try {
-    const promociones = await dbAll(`
-      SELECT p.*, 
-             GROUP_CONCAT(pi.producto_id || ':' || pi.cantidad || ':' || pr.nombre) as items
-      FROM promociones p
-      LEFT JOIN promocion_items pi ON p.id = pi.promocion_id
-      LEFT JOIN productos pr ON pi.producto_id = pr.id
-      WHERE p.activo = 1
-      GROUP BY p.id
-      ORDER BY p.nombre
-    `);
-    
-    const promocionesFormateadas = promociones.map(p => ({
-      ...p,
-      items: p.items ? p.items.split(',').map(item => {
-        const [producto_id, cantidad, nombre] = item.split(':');
-        return { producto_id: parseInt(producto_id), cantidad: parseInt(cantidad), nombre };
-      }) : []
-    }));
-    
-    res.json(promocionesFormateadas);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Obtener una promoción específica
-app.get('/api/promociones/:id', async (req, res) => {
-  try {
-    const promocion = await dbGet('SELECT * FROM promociones WHERE id = ?', [req.params.id]);
-    if (!promocion) {
-      return res.status(404).json({ error: 'Promoción no encontrada' });
-    }
-    
-    const items = await dbAll(`
-      SELECT pi.*, pr.nombre, pr.precio
-      FROM promocion_items pi
-      LEFT JOIN productos pr ON pi.producto_id = pr.id
-      WHERE pi.promocion_id = ?
-    `, [req.params.id]);
-    
-    res.json({ ...promocion, items });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Crear promoción
-app.post('/api/promociones', async (req, res) => {
-  try {
-    const { nombre, precio, descripcion, items } = req.body;
-    
-    const result = await dbRun(
-      'INSERT INTO promociones (nombre, precio, descripcion) VALUES (?, ?, ?)',
-      [nombre, precio, descripcion || '']
-    );
-    
-    // Insertar items de la promoción
-    if (items && items.length > 0) {
-      for (const item of items) {
-        await dbRun(
-          'INSERT INTO promocion_items (promocion_id, producto_id, cantidad) VALUES (?, ?, ?)',
-          [result.lastID, item.producto_id, item.cantidad || 1]
-        );
-      }
-    }
-    
-    res.json({ id: result.lastID, nombre, precio, descripcion });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Actualizar promoción
-app.put('/api/promociones/:id', async (req, res) => {
-  try {
-    const { nombre, precio, descripcion, items, activo } = req.body;
-    
-    await dbRun(
-      'UPDATE promociones SET nombre = ?, precio = ?, descripcion = ?, activo = ? WHERE id = ?',
-      [nombre, precio, descripcion || '', activo !== undefined ? activo : 1, req.params.id]
-    );
-    
-    // Eliminar items existentes y crear nuevos
-    await dbRun('DELETE FROM promocion_items WHERE promocion_id = ?', [req.params.id]);
-    
-    if (items && items.length > 0) {
-      for (const item of items) {
-        await dbRun(
-          'INSERT INTO promocion_items (promocion_id, producto_id, cantidad) VALUES (?, ?, ?)',
-          [req.params.id, item.producto_id, item.cantidad || 1]
-        );
-      }
-    }
-    
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Eliminar promoción
-app.delete('/api/promociones/:id', async (req, res) => {
-  try {
-    await dbRun('DELETE FROM promociones WHERE id = ?', [req.params.id]);
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Resumen de ventas
-app.get('/api/ventas/resumen', async (req, res) => {
-  try {
-    const resumen = await dbAll(`
-      SELECT 
-        medio_pago,
-        COUNT(DISTINCT pedido_id) as total_pedidos,
-        SUM(total_producto) as total_ventas,
-        SUM(cantidad) as total_productos_vendidos
-      FROM ventas
-      GROUP BY medio_pago
-    `);
-    
-    const total = await dbGet(`
-      SELECT 
-        COUNT(DISTINCT pedido_id) as total_pedidos,
-        SUM(total_producto) as total_ventas
-      FROM ventas
-    `);
-    
-    res.json({ por_medio_pago: resumen, total });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Ventas agrupadas por productos
-app.get('/api/ventas/por-productos', async (req, res) => {
-  try {
-    const { fecha_inicio, fecha_fin } = req.query;
-    let query = `
-      SELECT 
-        producto_id,
-        CASE 
-          WHEN es_promocion = 1 THEN promocion_nombre
-          ELSE producto_nombre
-        END as producto_nombre,
-        medio_pago,
-        SUM(cantidad) as cantidad_total,
-        CASE 
-          WHEN es_promocion = 1 THEN promocion_precio
-          ELSE precio_unitario
-        END as precio_unitario,
-        SUM(total_producto) as total_venta_producto,
-        COUNT(DISTINCT pedido_id) as veces_vendido,
-        es_promocion,
-        promocion_nombre
-      FROM ventas
-      WHERE 1=1
-    `;
-    const params = [];
-
-    if (fecha_inicio) {
-      query += ' AND fecha >= ?';
-      params.push(fecha_inicio);
-    }
-    if (fecha_fin) {
-      query += ' AND fecha <= ?';
-      params.push(fecha_fin);
-    }
-
-    query += `
-      GROUP BY 
-        CASE 
-          WHEN es_promocion = 1 THEN promocion_nombre
-          ELSE producto_id || '|' || producto_nombre
-        END,
-        medio_pago,
-        CASE 
-          WHEN es_promocion = 1 THEN promocion_precio
-          ELSE precio_unitario
-        END
-      ORDER BY cantidad_total DESC, producto_nombre ASC
-    `;
-    
-    const productos = await dbAll(query, params);
-    res.json(productos);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ========== CIERRE DE ACTIVIDAD ==========
-app.post('/api/cierre-actividad', async (req, res) => {
-  try {
-    console.log('Endpoint /api/cierre-actividad llamado');
     const { palabra_clave } = req.body;
-    const palabraCorrecta = 'MadreElvira';
+    const rol = req.headers['x-rol'] || 'sistema';
     
-    console.log('Palabra clave recibida:', palabra_clave ? '***' : '(vacía)');
-    
-    if (!palabra_clave) {
-      return res.status(400).json({ error: 'Palabra clave requerida' });
-    }
-    
-    if (palabra_clave !== palabraCorrecta) {
-      console.log('Palabra clave incorrecta');
+    if (palabra_clave !== PALABRA_CLAVE_CIERRE) {
       return res.status(400).json({ error: 'Palabra clave incorrecta' });
     }
     
-    console.log('Palabra clave correcta, iniciando cierre de actividad...');
+    const fecha = moment().tz(TIMEZONE).format('YYYY-MM-DD');
     
-    // Verificar que dbTransaction esté disponible
-    if (!dbTransaction) {
-      console.error('dbTransaction no está disponible');
-      return res.status(500).json({ error: 'Error: Función de transacción no disponible' });
+    // Verificar si ya existe un cierre para hoy
+    const cierreExistente = await dbGet('SELECT * FROM cierres_dia WHERE fecha = ?', [fecha]);
+    if (cierreExistente) {
+      return res.status(400).json({ error: 'Ya existe un cierre de día para la fecha de hoy' });
     }
     
-    // Realizar el cierre de actividad en una transacción atómica
-    let resultado;
+    // Calcular totales del día
+    const ventasDia = await dbAll(`
+      SELECT 
+        SUM(total_venta) as total_ventas,
+        SUM(CASE WHEN medio_pago = 'efectivo' THEN total_venta ELSE 0 END) as total_efectivo,
+        SUM(CASE WHEN medio_pago = 'transferencia' THEN total_venta ELSE 0 END) as total_transferencias,
+        COUNT(DISTINCT pedido_id) as total_pedidos
+      FROM ventas
+      WHERE DATE(fecha) = ?
+    `, [fecha]);
+    
+    const totales = ventasDia[0] || {
+      total_ventas: 0,
+      total_efectivo: 0,
+      total_transferencias: 0,
+      total_pedidos: 0
+    };
+    
+    // Obtener pedidos del día
+    const pedidosDia = await dbAll(`
+      SELECT id, nombre_cliente, total, medio_pago
+      FROM pedidos
+      WHERE DATE(created_at) = ? AND estado != 'cancelado'
+      ORDER BY created_at
+    `, [fecha]);
+    
+    // Obtener stock final
+    const stockFinal = await dbAll(`
+      SELECT id, nombre, stock, unidad_venta, eslabon_id
+      FROM productos
+      WHERE activo = 1
+      ORDER BY nombre
+    `);
+    
+    // Generar PDF
+    const datosPDF = {
+      fecha,
+      total_ventas: parseFloat(totales.total_ventas || 0),
+      total_efectivo: parseFloat(totales.total_efectivo || 0),
+      total_transferencias: parseFloat(totales.total_transferencias || 0),
+      total_pedidos: parseInt(totales.total_pedidos || 0),
+      pedidos: pedidosDia,
+      stock_final: stockFinal,
+      cerrado_por: rol
+    };
+    
+    const pdfBuffer = await generarCierreDia(datosPDF);
+    
+    // Subir PDF a Supabase (opcional)
+    let pdfUrl = null;
     try {
-      resultado = await dbTransaction(async () => {
-        const resultados = {};
-        
-        // 1. Eliminar todas las ventas (historial de ventas)
-        console.log('Eliminando historial de ventas...');
-        resultados.ventas = await dbRun('DELETE FROM ventas');
-        console.log('Ventas eliminadas. Registros:', resultados.ventas.changes);
-        
-        // 2. Eliminar todos los items de pedidos (relaciones)
-        console.log('Eliminando items de pedidos...');
-        resultados.pedidoItems = await dbRun('DELETE FROM pedido_items');
-        console.log('Pedido_items eliminados. Registros:', resultados.pedidoItems.changes);
-        
-        // 3. Eliminar todos los pedidos (actividades/movimientos)
-        console.log('Eliminando pedidos (movimientos)...');
-        resultados.pedidos = await dbRun('DELETE FROM pedidos');
-        console.log('Pedidos eliminados. Registros:', resultados.pedidos.changes);
-        
-        // 4. Eliminar todas las notificaciones
-        console.log('Eliminando notificaciones...');
-        resultados.notificaciones = await dbRun('DELETE FROM notificaciones');
-        console.log('Notificaciones eliminadas. Registros:', resultados.notificaciones.changes);
-        
-        // 5. Resetear todos los stocks a cero (mantener productos pero sin stock)
-        console.log('Reseteando stocks a cero...');
-        resultados.stocks = await dbRun('UPDATE productos SET stock = 0');
-        console.log('Stocks reseteados. Productos actualizados:', resultados.stocks.changes);
-        
-        return resultados;
-      });
-    } catch (transactionError) {
-      console.error('Error en la transacción:', transactionError);
-      throw new Error(`Error en la transacción de cierre de actividad: ${transactionError.message}`);
+      const { subirComprobante } = require('./config/supabase');
+      pdfUrl = await subirComprobante(
+        pdfBuffer,
+        `cierre_${fecha}.pdf`,
+        'application/pdf'
+      );
+    } catch (error) {
+      console.error('Error subiendo PDF:', error);
     }
     
-    // Verificar que se eliminaron todos los datos
-    console.log('Verificando limpieza completa...');
-    const ventasRestantes = await dbAll('SELECT COUNT(*) as count FROM ventas');
-    const pedidosRestantes = await dbAll('SELECT COUNT(*) as count FROM pedidos');
-    const pedidoItemsRestantes = await dbAll('SELECT COUNT(*) as count FROM pedido_items');
-    const notifRestantes = await dbAll('SELECT COUNT(*) as count FROM notificaciones');
-    const stockVerificado = await dbAll('SELECT SUM(stock) as total FROM productos');
+    // Guardar cierre en base de datos
+    await dbRun(
+      `INSERT INTO cierres_dia (fecha, total_ventas, total_efectivo, total_transferencias, total_pedidos, reporte_pdf_url, cerrado_por)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        fecha,
+        datosPDF.total_ventas,
+        datosPDF.total_efectivo,
+        datosPDF.total_transferencias,
+        datosPDF.total_pedidos,
+        pdfUrl,
+        rol
+      ]
+    );
     
-    console.log('Verificación final:');
-    console.log('- Ventas restantes:', ventasRestantes[0]?.count || 0);
-    console.log('- Pedidos restantes:', pedidosRestantes[0]?.count || 0);
-    console.log('- Items de pedidos restantes:', pedidoItemsRestantes[0]?.count || 0);
-    console.log('- Notificaciones restantes:', notifRestantes[0]?.count || 0);
-    console.log('- Stock total:', stockVerificado[0]?.total || 0);
+    await registrarAuditoria(rol, 'CIERRE_DIA', 'cierres_dia', null, null, datosPDF);
     
-    // Validar que todo se limpió correctamente
-    if (ventasRestantes[0]?.count > 0 || pedidosRestantes[0]?.count > 0 || 
-        pedidoItemsRestantes[0]?.count > 0 || notifRestantes[0]?.count > 0) {
-      throw new Error('Error: No se eliminaron todos los datos correctamente');
-    }
+    // Notificar a todos
+    broadcastToRol('atencion', { type: 'cierre_dia', fecha });
+    broadcastToProduccion({ type: 'cierre_dia', fecha });
+    broadcastToRol('despacho', { type: 'cierre_dia', fecha });
     
-    if (stockVerificado[0]?.total !== null && stockVerificado[0]?.total !== 0) {
-      throw new Error('Error: Los stocks no se resetearon correctamente a cero');
-    }
-    
-    console.log('✅ Cierre de actividad completado exitosamente. Sistema reiniciado a cero.');
-    
-    // Notificar a todos los perfiles
-    broadcastToPerfil('cocina', { type: 'cierre_actividad' });
-    broadcastToPerfil('despacho', { type: 'cierre_actividad' });
-    broadcastToPerfil('vendedor', { type: 'cierre_actividad' });
-    broadcastToPerfil('ventas', { type: 'cierre_actividad' });
-    
-    res.json({ 
-      success: true, 
-      mensaje: '✅ Cierre de actividad realizado exitosamente. Sistema reiniciado a cero:\n' +
-               '• Historial de ventas eliminado\n' +
-               '• Todos los movimientos y registros eliminados\n' +
-               '• Notificaciones eliminadas\n' +
-               '• Stocks de productos reseteados a cero\n' +
-               'El sistema está listo para un nuevo comienzo.'
+    res.json({
+      success: true,
+      mensaje: 'Cierre de día realizado exitosamente',
+      fecha,
+      totales: datosPDF,
+      pdf_url: pdfUrl
     });
   } catch (error) {
-    console.error('Error en cierre de actividad:', error);
+    console.error('Error en cierre de día:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Descargar PDF de cierre
+app.get('/api/cierre-dia/:fecha/pdf', async (req, res) => {
+  try {
+    const cierre = await dbGet('SELECT * FROM cierres_dia WHERE fecha = ?', [req.params.fecha]);
+    if (!cierre) {
+      return res.status(404).json({ error: 'Cierre no encontrado' });
+    }
+    
+    // Si hay URL de Supabase, redirigir
+    if (cierre.reporte_pdf_url) {
+      return res.redirect(cierre.reporte_pdf_url);
+    }
+    
+    // Generar PDF on-the-fly
+    const datosPDF = {
+      fecha: cierre.fecha,
+      total_ventas: parseFloat(cierre.total_ventas),
+      total_efectivo: parseFloat(cierre.total_efectivo),
+      total_transferencias: parseFloat(cierre.total_transferencias),
+      total_pedidos: cierre.total_pedidos,
+      cerrado_por: cierre.cerrado_por
+    };
+    
+    const pdfBuffer = await generarCierreDia(datosPDF);
+    
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=cierre_${req.params.fecha}.pdf`);
+    res.send(pdfBuffer);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ========== API RESET (Auditoría) ==========
+app.post('/api/reset', async (req, res) => {
+  try {
+    const { palabra_clave } = req.body;
+    const rol = req.headers['x-rol'] || 'sistema';
+    
+    if (palabra_clave !== PALABRA_CLAVE_CIERRE) {
+      return res.status(400).json({ error: 'Palabra clave incorrecta' });
+    }
+    
+    await dbTransaction(async (tx) => {
+      // Eliminar historiales y movimientos, pero mantener catálogo
+      await tx.run('DELETE FROM ventas', []);
+      await tx.run('DELETE FROM pedido_items', []);
+      await tx.run('DELETE FROM pedidos', []);
+      await tx.run('DELETE FROM notificaciones', []);
+      await tx.run('DELETE FROM cierres_dia', []);
+      await tx.run('UPDATE productos SET stock = 0', []);
+    });
+    
+    await registrarAuditoria(rol, 'RESET_SISTEMA', 'sistema', null, null, { accion: 'reset_completo' });
+    
+    broadcastToRol('atencion', { type: 'reset_sistema' });
+    broadcastToProduccion({ type: 'reset_sistema' });
+    broadcastToRol('despacho', { type: 'reset_sistema' });
+    
+    res.json({ success: true, mensaje: 'Sistema reseteado correctamente' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ========== API CONFIGURACIÓN ==========
+app.get('/api/configuracion', async (req, res) => {
+  try {
+    const config = await dbAll('SELECT * FROM configuracion');
+    const configObj = {};
+    config.forEach(item => {
+      if (item.tipo === 'number') {
+        configObj[item.clave] = parseFloat(item.valor);
+      } else if (item.tipo === 'boolean') {
+        configObj[item.clave] = item.valor === '1' || item.valor === 'true';
+      } else {
+        configObj[item.clave] = item.valor;
+      }
+    });
+    res.json(configObj);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ========== API AUDITORÍA ==========
+app.get('/api/auditoria', async (req, res) => {
+  try {
+    const { rol, tabla, fecha_inicio, fecha_fin, limite } = req.query;
+    const { obtenerAuditoria } = require('./config/auditoria');
+    
+    const auditoria = await obtenerAuditoria({
+      rol,
+      tabla,
+      fecha_inicio,
+      fecha_fin,
+      limite: limite ? parseInt(limite) : 100
+    });
+    
+    res.json(auditoria);
+  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
@@ -821,6 +938,7 @@ const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 
 server.listen(PORT, HOST, () => {
-  console.log(`Servidor corriendo en http://${HOST}:${PORT}`);
+  console.log(`✅ Servidor corriendo en http://${HOST}:${PORT}`);
+  console.log(`📅 Timezone: ${TIMEZONE}`);
+  console.log(`🥤 Vasos por botella: ${VASOS_POR_BOTELLA}`);
 });
-

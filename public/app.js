@@ -1,7 +1,8 @@
 // Estado global
 let estado = {
     perfilActual: null,
-    cocinaActual: null,
+    eslabonActual: null,
+    eslabonTipo: null,
     productos: [],
     pedidoActual: {},
     ws: null
@@ -121,15 +122,19 @@ function manejarNotificacion(data) {
     
     actualizarNotificaciones();
     
-    if (data.type === 'nuevo_pedido' && estado.perfilActual === 'cocina') {
-        if (estado.cocinaActual) {
-            cargarPedidosCocina(estado.cocinaActual);
+    if (data.type === 'nuevo_pedido' && estado.perfilActual === 'produccion') {
+        if (estado.eslabonActual) {
+            cargarPedidosEslabon(estado.eslabonActual);
         }
     } else if (data.type === 'pedido_listo' && estado.perfilActual === 'despacho') {
         cargarPedidosDespacho();
-    } else if (data.type === 'pedido_entregado' && estado.perfilActual === 'vendedor') {
+    } else if (data.type === 'pedido_entregado' && estado.perfilActual === 'atencion') {
         // Notificación visual
         mostrarMensaje('Pedido entregado', 'success');
+    } else if (data.type === 'alerta_stock') {
+        mostrarMensaje(data.mensaje || '⚠️ Alerta de stock bajo', 'warning');
+    } else if (data.type === 'cierre_dia') {
+        mostrarMensaje('📅 Cierre de día realizado', 'success');
     }
 }
 
@@ -152,8 +157,8 @@ function seleccionarPerfil(perfil) {
         // Obtener la pantalla objetivo
         let pantallaObjetivo = null;
         switch(perfil) {
-            case 'vendedor':
-                pantallaObjetivo = document.getElementById('vendedor-screen');
+            case 'atencion':
+                pantallaObjetivo = document.getElementById('atencion-screen');
                 // Resetear estado del vendedor
                 estadoVendedor = {
                     rubroActual: null,
@@ -181,14 +186,14 @@ function seleccionarPerfil(perfil) {
                 
                 actualizarBotonCarrito();
                 break;
-            case 'cocina':
-                pantallaObjetivo = document.getElementById('cocina-screen');
-                // Resetear selección de cocina al entrar
-                estado.cocinaActual = null;
-                document.getElementById('cocina-content').style.display = 'none';
-                document.getElementById('cocina-seleccion').style.display = 'block';
-                document.getElementById('cocina-selector').value = '';
-                document.getElementById('btn-confirmar-cocina').style.display = 'none';
+            case 'produccion':
+                pantallaObjetivo = document.getElementById('produccion-screen');
+                // Resetear selección de eslabón al entrar
+                estado.eslabonActual = null;
+                const produccionContent = document.getElementById('produccion-content');
+                const produccionSeleccion = document.getElementById('produccion-seleccion');
+                if (produccionContent) produccionContent.style.display = 'none';
+                if (produccionSeleccion) produccionSeleccion.style.display = 'block';
                 break;
             case 'despacho':
                 pantallaObjetivo = document.getElementById('despacho-screen');
@@ -220,13 +225,13 @@ function seleccionarPerfil(perfil) {
         
         // Ejecutar funciones específicas del perfil
         switch(perfil) {
-            case 'vendedor':
+            case 'atencion':
                 // No cargar productos aquí, se cargan al seleccionar rubro
-                registrarWebSocket('vendedor');
+                registrarWebSocket('atencion');
                 break;
-            case 'cocina':
-                cargarCocinas();
-                registrarWebSocket('cocina');
+            case 'produccion':
+                cargarEslabones();
+                registrarWebSocket('produccion');
                 break;
             case 'despacho':
                 cargarPedidosDespacho();
@@ -467,9 +472,12 @@ async function procesarCierreActividad() {
         mostrarMensaje('Procesando cierre de actividad...', 'success');
         
         // Enviar solicitud al servidor con la palabra clave guardada
-        const response = await fetch('/api/cierre-actividad', {
+        const response = await fetch('/api/reset', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+                'Content-Type': 'application/json',
+                'x-rol': 'sistema'
+            },
             body: JSON.stringify({ palabra_clave: palabraClaveParaEnviar })
         });
         
@@ -481,7 +489,7 @@ async function procesarCierreActividad() {
             
             // Limpiar estado
             estado.perfilActual = null;
-            estado.cocinaActual = null;
+            estado.eslabonActual = null;
             
             // Limpiar estado del vendedor si existe
             if (typeof estadoVendedor !== 'undefined') {
@@ -1438,18 +1446,38 @@ async function finalizarPedido() {
     }
     
     try {
-        const response = await fetch('/api/pedidos', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                nombre_cliente: nombreCliente,
-                items: items,
-                promociones: promociones,
-                medio_pago: estadoVendedor.medioPago,
-                foto_comprobante: estadoVendedor.fotoComprobante,
-                vendedor_id: 'vendedor1'
-            })
-        });
+        // Si hay comprobante, usar FormData, sino JSON
+        let response;
+        if (estadoVendedor.medioPago === 'transferencia' && estadoVendedor.fotoComprobante) {
+            const formData = new FormData();
+            formData.append('nombre_cliente', nombreCliente);
+            formData.append('items', JSON.stringify(items));
+            formData.append('promociones', JSON.stringify(promociones));
+            formData.append('medio_pago', estadoVendedor.medioPago);
+            formData.append('rol_atencion', 'atencion');
+            
+            // Si fotoComprobante es un File, agregarlo directamente
+            if (estadoVendedor.fotoComprobante instanceof File || estadoVendedor.fotoComprobante instanceof Blob) {
+                formData.append('comprobante', estadoVendedor.fotoComprobante, 'comprobante.jpg');
+            }
+            
+            response = await fetch('/api/pedidos', {
+                method: 'POST',
+                body: formData
+            });
+        } else {
+            response = await fetch('/api/pedidos', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    nombre_cliente: nombreCliente,
+                    items: items,
+                    promociones: promociones,
+                    medio_pago: estadoVendedor.medioPago,
+                    rol_atencion: 'atencion'
+                })
+            });
+        }
         
         if (response.ok) {
             mostrarMensaje('Pedido creado exitosamente', 'success');
@@ -1516,108 +1544,123 @@ async function modificarCantidadEmpanadas(productoId, cambioDocenas) {
 // Funciones antiguas eliminadas - ahora se usa el sistema de carrito
 
 // ========== COCINA ==========
-async function cargarCocinas() {
+async function cargarEslabones() {
     try {
-        const cocinas = await fetch('/api/cocinas').then(r => r.json());
-        const selector = document.getElementById('cocina-selector');
-        selector.innerHTML = '<option value="">-- Selecciona una cocina --</option>';
+        const eslabones = await fetch('/api/eslabones').then(r => r.json());
+        const grid = document.getElementById('eslabones-grid');
+        if (!grid) return;
         
-        cocinas.forEach(cocina => {
-            const option = document.createElement('option');
-            option.value = cocina.id;
-            option.textContent = cocina.nombre;
-            selector.appendChild(option);
-        });
+        grid.innerHTML = '';
         
-        // Agregar listener para mostrar botón de confirmar
-        selector.addEventListener('change', function() {
-            const btnConfirmar = document.getElementById('btn-confirmar-cocina');
-            if (this.value) {
-                btnConfirmar.style.display = 'block';
-            } else {
-                btnConfirmar.style.display = 'none';
-            }
+        const iconos = {
+            'cocina': '🍳',
+            'parrilla': '🔥',
+            'horno': '🔥',
+            'bebidas': '🥤',
+            'postres': '🍰'
+        };
+        
+        eslabones.forEach(eslabon => {
+            const btn = document.createElement('button');
+            btn.className = 'perfil-btn';
+            btn.style.cssText = 'padding: 20px; text-align: center; border-radius: 12px; border: 2px solid var(--border); background: var(--card-bg); cursor: pointer; transition: all 0.3s;';
+            btn.innerHTML = `
+                <span style="font-size: 3rem; display: block; margin-bottom: 10px;">${iconos[eslabon.tipo] || '🍴'}</span>
+                <span style="font-weight: 600; font-size: 1.1rem;">${eslabon.nombre}</span>
+            `;
+            btn.onclick = () => confirmarEslabon(eslabon.id, eslabon.nombre, eslabon.tipo);
+            grid.appendChild(btn);
         });
     } catch (error) {
-        console.error('Error cargando cocinas:', error);
+        console.error('Error cargando eslabones:', error);
+        mostrarMensaje('Error cargando eslabones', 'error');
     }
 }
 
-function confirmarCocina() {
-    const cocinaId = document.getElementById('cocina-selector').value;
-    
-    if (!cocinaId) {
-        mostrarMensaje('Por favor selecciona una cocina', 'error');
-        return;
-    }
-    
-    // Obtener nombre de la cocina
-    const selector = document.getElementById('cocina-selector');
-    const cocinaNombre = selector.options[selector.selectedIndex].text;
-    
-    estado.cocinaActual = cocinaId;
+function confirmarEslabon(eslabonId, eslabonNombre, eslabonTipo) {
+    estado.eslabonActual = eslabonId;
+    estado.eslabonTipo = eslabonTipo;
     
     // Ocultar selección y mostrar contenido
-    document.getElementById('cocina-seleccion').style.display = 'none';
-    document.getElementById('cocina-content').style.display = 'block';
-    document.getElementById('cocina-nombre-actual').textContent = cocinaNombre;
+    const produccionSeleccion = document.getElementById('produccion-seleccion');
+    const produccionContent = document.getElementById('produccion-content');
+    const eslabonNombreActual = document.getElementById('eslabon-nombre-actual');
+    
+    if (produccionSeleccion) produccionSeleccion.style.display = 'none';
+    if (produccionContent) produccionContent.style.display = 'block';
+    if (eslabonNombreActual) eslabonNombreActual.textContent = eslabonNombre;
     
     // Mostrar vista de pedidos (principal) y ocultar productos
-    document.getElementById('cocina-pedidos-view').style.display = 'block';
-    document.getElementById('cocina-productos-view').style.display = 'none';
+    const pedidosView = document.getElementById('produccion-pedidos-view');
+    const productosView = document.getElementById('produccion-productos-view');
+    if (pedidosView) pedidosView.style.display = 'block';
+    if (productosView) productosView.style.display = 'none';
     
-    // Cargar datos de la cocina (pedidos primero)
-    cargarPedidosCocina(cocinaId);
-    cargarProductosCocina(cocinaId);
+    // Cargar datos del eslabón (pedidos primero)
+    cargarPedidosEslabon(eslabonId);
+    cargarProductosEslabon(eslabonId);
     
-    mostrarMensaje(`Cocina ${cocinaNombre} seleccionada`, 'success');
+    // Registrar WebSocket con el tipo de eslabón
+    registrarWebSocket(eslabonTipo);
+    
+    mostrarMensaje(`Eslabón ${eslabonNombre} seleccionado`, 'success');
 }
 
 function mostrarGestionProductos() {
-    document.getElementById('cocina-pedidos-view').style.display = 'none';
-    document.getElementById('cocina-productos-view').style.display = 'block';
+    const pedidosView = document.getElementById('produccion-pedidos-view');
+    const productosView = document.getElementById('produccion-productos-view');
+    if (pedidosView) pedidosView.style.display = 'none';
+    if (productosView) productosView.style.display = 'block';
     // Asegurar que los productos estén cargados
-    if (estado.cocinaActual) {
-        cargarProductosCocina(estado.cocinaActual);
+    if (estado.eslabonActual) {
+        cargarProductosEslabon(estado.eslabonActual);
     }
 }
 
 function ocultarGestionProductos() {
-    document.getElementById('cocina-pedidos-view').style.display = 'block';
-    document.getElementById('cocina-productos-view').style.display = 'none';
+    const pedidosView = document.getElementById('produccion-pedidos-view');
+    const productosView = document.getElementById('produccion-productos-view');
+    if (pedidosView) pedidosView.style.display = 'block';
+    if (productosView) productosView.style.display = 'none';
     // Recargar pedidos al volver
-    if (estado.cocinaActual) {
-        cargarPedidosCocina(estado.cocinaActual);
+    if (estado.eslabonActual) {
+        cargarPedidosEslabon(estado.eslabonActual);
     }
 }
 
-function cambiarCocina() {
-    estado.cocinaActual = null;
-    document.getElementById('cocina-content').style.display = 'none';
-    document.getElementById('cocina-seleccion').style.display = 'block';
-    document.getElementById('cocina-selector').value = '';
-    document.getElementById('btn-confirmar-cocina').style.display = 'none';
+function cambiarEslabon() {
+    estado.eslabonActual = null;
+    estado.eslabonTipo = null;
+    const produccionContent = document.getElementById('produccion-content');
+    const produccionSeleccion = document.getElementById('produccion-seleccion');
+    if (produccionContent) produccionContent.style.display = 'none';
+    if (produccionSeleccion) produccionSeleccion.style.display = 'block';
     // Resetear vistas
-    document.getElementById('cocina-pedidos-view').style.display = 'block';
-    document.getElementById('cocina-productos-view').style.display = 'none';
+    const pedidosView = document.getElementById('produccion-pedidos-view');
+    const productosView = document.getElementById('produccion-productos-view');
+    if (pedidosView) pedidosView.style.display = 'block';
+    if (productosView) productosView.style.display = 'none';
 }
 
-async function cargarProductosCocina(cocinaId) {
+async function cargarProductosEslabon(eslabonId) {
     try {
-        const productos = await fetch(`/api/cocinas/${cocinaId}/productos`).then(r => r.json());
+        const productos = await fetch(`/api/eslabones/${eslabonId}/productos`).then(r => r.json());
         const lista = document.getElementById('productos-lista');
+        if (!lista) return;
         lista.innerHTML = '';
         
         productos.forEach(producto => {
             const div = document.createElement('div');
             div.className = 'producto-gestion';
             
-            // Mostrar stock en docenas si es empanada
-            const esEmpanada = producto.nombre.toLowerCase().includes('empanada');
+            // Mostrar stock según tipo de venta
             let stockDisplay = producto.stock;
-            if (esEmpanada) {
+            if (producto.tipo_venta === 'docena') {
                 const docenas = (producto.stock / 12).toFixed(1);
                 stockDisplay = `${docenas} docenas (${producto.stock} unidades)`;
+            } else if (producto.tipo_venta === 'media_docena') {
+                const mediaDocenas = (producto.stock / 6).toFixed(1);
+                stockDisplay = `${mediaDocenas} media docenas (${producto.stock} unidades)`;
             }
             
             div.innerHTML = `
@@ -1637,9 +1680,9 @@ async function cargarProductosCocina(cocinaId) {
     }
 }
 
-async function cargarPedidosCocina(cocinaId) {
+async function cargarPedidosEslabon(eslabonId) {
     try {
-        const pedidos = await fetch(`/api/cocinas/${cocinaId}/pedidos`).then(r => r.json());
+        const pedidos = await fetch(`/api/eslabones/${eslabonId}/pedidos`).then(r => r.json());
         const lista = document.getElementById('pedidos-lista');
         lista.innerHTML = '';
         
@@ -1650,8 +1693,15 @@ async function cargarPedidosCocina(cocinaId) {
         
         pedidos.forEach(pedido => {
             // Detectar si hay bebidas por vaso en el pedido
-            const tieneBebidasVaso = pedido.items.some(item => item.nombre.toLowerCase().includes('vaso'));
-            const itemsVaso = pedido.items.filter(item => item.nombre.toLowerCase().includes('vaso'));
+            // Usar es_vaso si está disponible, sino buscar por nombre
+            const tieneBebidasVaso = pedido.items.some(item => 
+                item.es_vaso === true || 
+                (item.categoria === 'bebida' && (item.producto_base_id || item.nombre.toLowerCase().includes('vaso')))
+            );
+            const itemsVaso = pedido.items.filter(item => 
+                item.es_vaso === true || 
+                (item.categoria === 'bebida' && (item.producto_base_id || item.nombre.toLowerCase().includes('vaso')))
+            );
             
             const div = document.createElement('div');
             div.className = 'pedido-card';
@@ -1669,17 +1719,29 @@ async function cargarPedidosCocina(cocinaId) {
                     `).join('')}
                 </div>
                 ${tieneBebidasVaso ? `
-                <div style="margin: 10px 0; padding: 10px; background: var(--bg-secondary); border-radius: 8px; border-left: 3px solid var(--warning);">
-                    <div style="font-size: 0.9rem; color: var(--text-light); margin-bottom: 8px;">
-                        🥤 Bebidas por vaso en este pedido:
+                <div style="margin: 10px 0; padding: 12px; background: #fff3cd; border-radius: 8px; border-left: 4px solid #ffc107;">
+                    <div style="font-size: 0.9rem; color: #856404; margin-bottom: 10px; font-weight: 600;">
+                        🥤 Bebidas por vaso - Descontar botellas:
                     </div>
-                    ${itemsVaso.map(item => `
-                        <div style="margin: 5px 0;">
-                            <button class="btn-secondary" onclick="descontarBotella(${pedido.id}, ${item.producto_id}, ${item.cantidad})" style="font-size: 0.85rem; padding: 8px 12px;">
-                                Descontar botella para: ${item.nombre} (${item.cantidad} vasos)
-                            </button>
+                    ${itemsVaso.map(item => {
+                        const botellasNecesarias = Math.ceil(item.cantidad / 4); // 4 vasos por botella
+                        return `
+                        <div style="margin: 8px 0; padding: 8px; background: white; border-radius: 6px; border: 1px solid #ffc107;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                <div>
+                                    <strong>${item.nombre}</strong>
+                                    <div style="font-size: 0.8rem; color: #856404;">
+                                        ${item.cantidad} vaso(s) = ${botellasNecesarias} botella(s) necesaria(s)
+                                    </div>
+                                </div>
+                                <button class="btn-secondary" onclick="descontarBotella(${pedido.id}, ${item.producto_id}, ${item.cantidad})" 
+                                        style="background: #ffc107; color: #856404; border-color: #ffc107; font-weight: 600; padding: 8px 16px;">
+                                    Descontar ${botellasNecesarias} Botella(s)
+                                </button>
+                            </div>
                         </div>
-                    `).join('')}
+                        `;
+                    }).join('')}
                 </div>
                 ` : ''}
                 <div class="pedido-actions">
@@ -1710,8 +1772,8 @@ async function actualizarEstadoPedido(pedidoId, nuevoEstado) {
             body: JSON.stringify({ estado: nuevoEstado })
         });
         
-        if (estado.cocinaActual) {
-            cargarPedidosCocina(estado.cocinaActual);
+        if (estado.eslabonActual) {
+            cargarPedidosEslabon(estado.eslabonActual);
         }
         mostrarMensaje('Estado actualizado', 'success');
     } catch (error) {
@@ -1721,6 +1783,10 @@ async function actualizarEstadoPedido(pedidoId, nuevoEstado) {
 }
 
 async function descontarBotella(pedidoId, productoVasoId, cantidadVasos) {
+    if (!confirm(`¿Deseas descontar la(s) botella(s) necesaria(s) para ${cantidadVasos} vaso(s)?`)) {
+        return;
+    }
+    
     try {
         const response = await fetch(`/api/pedidos/${pedidoId}/descontar-botella`, {
             method: 'POST',
@@ -1738,16 +1804,19 @@ async function descontarBotella(pedidoId, productoVasoId, cantidadVasos) {
             return;
         }
         
-        mostrarMensaje(`Se descontaron ${data.botellas_descontadas} botella(s). Stock restante: ${data.stock_restante} botellas`, 'success');
+        mostrarMensaje(
+            `✅ Se descontaron ${data.botellas_descontadas} botella(s) de "${data.botella_nombre}". Stock restante: ${data.stock_restante} botellas`, 
+            'success'
+        );
         
-        // Recargar pedidos para actualizar la vista
-        if (estado.cocinaActual) {
-            cargarPedidosCocina(estado.cocinaActual);
-            cargarProductosCocina(estado.cocinaActual);
+        // Recargar pedidos y productos para actualizar la vista
+        if (estado.eslabonActual) {
+            cargarPedidosEslabon(estado.eslabonActual);
+            cargarProductosEslabon(estado.eslabonActual);
         }
     } catch (error) {
         console.error('Error:', error);
-        mostrarMensaje('Error al descontar botella', 'error');
+        mostrarMensaje('Error al descontar botella: ' + error.message, 'error');
     }
 }
 
@@ -1828,7 +1897,7 @@ async function guardarProducto() {
             mostrarMensaje('Producto actualizado', 'success');
         } else {
             // Crear nuevo producto
-            await fetch(`/api/cocinas/${estado.cocinaActual}/productos`, {
+            await fetch(`/api/eslabones/${estado.eslabonActual}/productos`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ nombre, precio, stock })
@@ -1838,7 +1907,7 @@ async function guardarProducto() {
         
         cerrarModal();
         delete document.getElementById('modal-producto').dataset.productoId;
-        cargarProductosCocina(estado.cocinaActual);
+        cargarProductosEslabon(estado.eslabonActual);
     } catch (error) {
         console.error('Error:', error);
         mostrarMensaje('Error al guardar producto', 'error');
@@ -3218,4 +3287,119 @@ if (document.readyState === 'loading') {
 } else {
     console.log('DOM ya cargado, funciones disponibles');
 }
+
+// ========== FUNCIONES DE CIERRE DE DÍA ==========
+function abrirModalCierreDia() {
+    const modal = document.getElementById('modal-cierre-dia');
+    const input = document.getElementById('palabra-clave-cierre-dia');
+    
+    if (!modal) {
+        console.error('Modal de cierre de día no encontrado');
+        mostrarMensaje('Error: Modal no encontrado', 'error');
+        return;
+    }
+    
+    if (input) {
+        input.value = '';
+        input.onkeypress = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                procesarCierreDia();
+            }
+        };
+    }
+    
+    modal.classList.add('active');
+    setTimeout(() => {
+        if (input) input.focus();
+    }, 100);
+}
+
+function cerrarModalCierreDia() {
+    const modal = document.getElementById('modal-cierre-dia');
+    const input = document.getElementById('palabra-clave-cierre-dia');
+    
+    if (modal) modal.classList.remove('active');
+    if (input) input.value = '';
+}
+
+async function procesarCierreDia() {
+    try {
+        const input = document.getElementById('palabra-clave-cierre-dia');
+        if (!input) {
+            mostrarMensaje('Error: Campo no encontrado', 'error');
+            return;
+        }
+        
+        const palabraClave = input.value.trim();
+        if (!palabraClave) {
+            mostrarMensaje('Por favor ingresa la palabra clave', 'error');
+            input.focus();
+            return;
+        }
+        
+        mostrarMensaje('Generando cierre de día...', 'success');
+        
+        const response = await fetch('/api/cierre-dia', {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'x-rol': 'atencion'
+            },
+            body: JSON.stringify({ palabra_clave: palabraClave })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            cerrarModalCierreDia();
+            
+            if (data.pdf_url) {
+                mostrarMensaje('✅ Cierre de día realizado. Descargando PDF...', 'success');
+                window.open(data.pdf_url, '_blank');
+            } else {
+                mostrarMensaje('✅ Cierre de día realizado exitosamente', 'success');
+            }
+        } else {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Error al procesar cierre de día');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        mostrarMensaje(error.message || 'Error al procesar el cierre de día', 'error');
+    }
+}
+
+// ========== FUNCIONES DE MANEJO DE ARCHIVOS ==========
+function manejarArchivoComprobante(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    if (!file.type.startsWith('image/')) {
+        mostrarMensaje('Por favor selecciona una imagen', 'error');
+        return;
+    }
+    
+    estadoVendedor.fotoComprobante = file;
+    
+    // Mostrar preview
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const preview = document.getElementById('foto-preview');
+        if (preview) {
+            preview.innerHTML = `
+                <img src="${e.target.result}" style="max-width: 100%; max-height: 300px; border-radius: 8px; border: 2px solid var(--border);">
+                <p style="margin-top: 10px; color: var(--text-secondary);">Foto seleccionada</p>
+            `;
+        }
+        document.getElementById('btn-finalizar-transferencia').style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+}
+
+// Exportar funciones globalmente
+window.abrirModalCierreDia = abrirModalCierreDia;
+window.cerrarModalCierreDia = cerrarModalCierreDia;
+window.procesarCierreDia = procesarCierreDia;
+window.manejarArchivoComprobante = manejarArchivoComprobante;
+
 
