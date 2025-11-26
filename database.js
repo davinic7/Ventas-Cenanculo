@@ -549,6 +549,15 @@ const insertarDatosIniciales = async () => {
 };
 
 // Inicializar al cargar el módulo
-initDatabase().catch(console.error);
+initDatabase().catch((error) => {
+  console.error('❌ Error crítico inicializando base de datos:', error);
+  console.error('Detalles:', {
+    message: error.message,
+    code: error.code,
+    stack: error.stack
+  });
+  // No lanzar el error para que el servidor pueda iniciar
+  // pero los endpoints fallarán hasta que la BD esté lista
+});
 
 module.exports = { pool, dbRun, dbGet, dbAll, dbTransaction, initDatabase };

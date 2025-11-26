@@ -90,10 +90,11 @@ wss.on('connection', (ws, req) => {
 // Obtener todos los eslabones
 app.get('/api/eslabones', async (req, res) => {
   try {
-    const eslabones = await dbAll('SELECT * FROM eslabones WHERE activo = 1 ORDER BY nombre');
-    res.json(eslabones);
+    const eslabones = await dbAll('SELECT * FROM eslabones WHERE activo = true ORDER BY nombre');
+    res.json(eslabones || []);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error obteniendo eslabones:', error);
+    res.status(500).json({ error: error.message, details: error.code });
   }
 });
 
@@ -105,7 +106,7 @@ app.get('/api/eslabones/:id/productos', async (req, res) => {
        FROM productos p
        LEFT JOIN categorias c ON p.categoria_id = c.id
        LEFT JOIN eslabones e ON p.eslabon_id = e.id
-       WHERE p.eslabon_id = ? AND p.activo = 1
+       WHERE p.eslabon_id = ? AND p.activo = true
        ORDER BY p.nombre`,
       [req.params.id]
     );
@@ -236,7 +237,7 @@ app.get('/api/productos/:id', async (req, res) => {
 // ========== API CATEGORÍAS ==========
 app.get('/api/categorias', async (req, res) => {
   try {
-    const categorias = await dbAll('SELECT * FROM categorias WHERE activa = 1 ORDER BY nombre');
+    const categorias = await dbAll('SELECT * FROM categorias WHERE activa = true ORDER BY nombre');
     res.json(categorias);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -561,7 +562,7 @@ app.post('/api/pedidos/:id/descontar-botella', async (req, res) => {
     // Buscar botella base
     let productoBotella = null;
     if (productoVaso.producto_base_id) {
-      productoBotella = await dbGet('SELECT id, stock, nombre FROM productos WHERE id = ? AND activo = 1', [productoVaso.producto_base_id]);
+      productoBotella = await dbGet('SELECT id, stock, nombre FROM productos WHERE id = ? AND activo = true', [productoVaso.producto_base_id]);
     }
     
     if (!productoBotella) {
@@ -667,21 +668,23 @@ app.put('/api/pedidos/:id/entregado', async (req, res) => {
 app.get('/api/notificaciones/:rol', async (req, res) => {
   try {
     const notificaciones = await dbAll(
-      'SELECT * FROM notificaciones WHERE rol_destino = ? AND leida = 0 ORDER BY created_at DESC LIMIT 20',
+      'SELECT * FROM notificaciones WHERE rol_destino = ? AND leida = false ORDER BY created_at DESC LIMIT 20',
       [req.params.rol]
     );
-    res.json(notificaciones);
+    res.json(notificaciones || []);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error obteniendo notificaciones:', error);
+    res.status(500).json({ error: error.message, details: error.code });
   }
 });
 
 app.put('/api/notificaciones/:id/leida', async (req, res) => {
   try {
-    await dbRun('UPDATE notificaciones SET leida = 1 WHERE id = ?', [req.params.id]);
+    await dbRun('UPDATE notificaciones SET leida = true WHERE id = ?', [req.params.id]);
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error actualizando notificación:', error);
+    res.status(500).json({ error: error.message, details: error.code });
   }
 });
 
@@ -763,7 +766,7 @@ app.post('/api/cierre-dia', async (req, res) => {
     const stockFinal = await dbAll(`
       SELECT id, nombre, stock, unidad_venta, eslabon_id
       FROM productos
-      WHERE activo = 1
+      WHERE activo = true
       ORDER BY nombre
     `);
     
